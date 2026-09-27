@@ -184,50 +184,186 @@
     return out;
   }
 
-  // ---------- تعهدات: اقساط و پرداخت‌های ثابت ----------
+  // ---------- تعهدات: اقساط و پرداخت‌های ماهانه ----------
+  function txAmountMap(state) { const m = new Map(); for (const t of state.tx) m.set(t.id, t.amount); return m; }
   function loanDue(loan, i) { return addMonths(loan.first, i, jParse(loan.first).d); }
 
-  function obligationsForMonth(state, ymStr) {
+  // هر تعهد: amount = مبلغ واقعی اگه پرداخت شده، وگرنه مبلغ اسمی/پیش‌بینی
+  function obligationsForMonth(state, ymStr, txMap) {
+    txMap = txMap || txAmountMap(state);
+    const [y, m] = ymStr.split('/').map(Number);
+    const paidAmount = (info, nominal) => info.txId && txMap.has(info.txId) ? txMap.get(info.txId) : nominal;
     const list = [];
     for (const l of state.loans) {
       const [fy, fm] = l.first.split('/').map(Number);
-      const [y, m] = ymStr.split('/').map(Number);
       const i = (y * 12 + m) - (fy * 12 + fm);
-      if (i >= 0 && i < l.count) {
-        list.push({ kind: 'loan', id: l.id, key: String(i), name: l.name, sub: `قسط ${faDigits(i + 1)} از ${faDigits(l.count)}`,
-          amount: l.amount, due: loanDue(l, i), paid: !!(l.paid && l.paid[i]) });
-      }
+      if (i < 0 || i >= l.count) continue;
+      const info = l.paid && l.paid[i];
+      list.push({ kind: 'loan', id: l.id, key: String(i), name: l.name, sub: `قسط ${faDigits(i + 1)} از ${faDigits(l.count)}`,
+        estimate: l.amount, amount: info ? paidAmount(info, l.amount) : l.amount, due: loanDue(l, i), paid: !!info, variable: false });
     }
     for (const f of state.fixed) {
       if (f.start && ymStr < f.start) continue;
       if (f.end && ymStr > f.end) continue;
-      const [y, m] = ymStr.split('/').map(Number);
-      list.push({ kind: 'fixed', id: f.id, key: ymStr, name: f.name, sub: 'پرداخت ماهانه',
-        amount: f.amount, due: jStr(y, m, Math.min(f.day, monthLen(y, m))), paid: !!(f.paid && f.paid[ymStr]) });
+      const info = f.paid && f.paid[ymStr];
+      list.push({ kind: 'fixed', id: f.id, key: ymStr, name: f.name, sub: f.variable ? 'متغیر، پیش‌بینی' : 'پرداخت ماهانه',
+        estimate: f.amount, amount: info ? paidAmount(info, f.amount) : f.amount, due: jStr(y, m, Math.min(f.day, monthLen(y, m))),
+        paid: !!info, variable: !!f.variable });
     }
-    return list.sort((a, b) => a.due.localeCompare(b.due));
+    return list.sort((a, b) => a.due.localeCompare(b.due) || a.name.localeCompare(b.name));
+  }
+
+  // تعهدات پرداخت‌نشده در بازه‌ی چند ماه اطراف ماه مرجع
+  function openObligations(state, refYm, fromOffset, toOffset) {
+    const map = txAmountMap(state); let all = [];
+    for (let i = fromOffset; i <= toOffset; i++) all = all.concat(obligationsForMonth(state, addYm(refYm, i), map));
+    return all.filter(o => !o.paid);
   }
 
   function monthStats(state, ymStr) {
+    const map = txAmountMap(state);
     const txs = state.tx.filter(t => ym(t.date) === ymStr);
     const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
     const variable = txs.filter(t => t.type === 'expense' && !t.link).reduce((s, t) => s + t.amount, 0);
-    const obs = obligationsForMonth(state, ymStr);
-    const obTotal = obs.reduce((s, o) => s + o.amount, 0);
-    const obPaid = obs.filter(o => o.paid).reduce((s, o) => s + o.amount, 0);
-    const expected = state.settings.expectedIncome || 0;
+    const obs = obligationsForMonth(state, ymStr, map);
+    const sum = arr => arr.reduce((s, o) => s + o.amount, 0);
+    const unpaid = obs.filter(o => !o.paid), paid = obs.filter(o => o.paid);
+    const obTotal = sum(obs), obPaid = sum(paid), obRemaining = sum(unpaid);
+    const expected = (state.settings && state.settings.expectedIncome) || 0;
     const base = Math.max(income, expected);
-    return { income, expected, base, usedExpected: expected > income, variable, obTotal, obPaid, obs,
+    return { income, expected, base, hasIncome: base > 0, usedExpected: expected > income, variable, obs,
+      obTotal, obPaid, obRemaining, count: obs.length, paidCount: paid.length,
+      loanRemaining: sum(unpaid.filter(o => o.kind === 'loan')),
+      fixedRemaining: sum(unpaid.filter(o => o.kind === 'fixed' && !o.variable)),
+      varRemaining: sum(unpaid.filter(o => o.variable)),
       free: base - obTotal - variable };
   }
 
   function loanSummary(loan) {
-    const paidCount = Object.keys(loan.paid || {}).length;
-    const remainingCount = loan.count - paidCount;
-    return { paidCount, remainingCount, remainingAmount: remainingCount * loan.amount,
-      last: loanDue(loan, loan.count - 1), next: (() => { for (let i = 0; i < loan.count; i++) if (!(loan.paid || {})[i]) return { i, due: loanDue(loan, i) }; return null; })() };
+    const paidCount = Object.keys(loan.paid || {}).filter(k => +k < loan.count).length;
+    const remainingCount = Math.max(0, loan.count - paidCount);
+    let next = null;
+    for (let i = 0; i < loan.count; i++) if (!(loan.paid || {})[i]) { next = { i, due: loanDue(loan, i) }; break; }
+    return { paidCount, remainingCount, remainingAmount: remainingCount * loan.amount, last: loanDue(loan, loan.count - 1), next };
+  }
+
+  // ---------- شاخص‌ها (KPI) و داده‌ی نمودارها ----------
+  const ymIndex = s => { const [y, m] = s.split('/').map(Number); return y * 12 + m - 1; };
+
+  // خرج یک ماه به تفکیک: اقساط وام، پرداخت‌های ماهانه، خرج روزمره
+  function monthOutflow(state, ymStr) {
+    const o = { loans: 0, bills: 0, daily: 0, total: 0 };
+    for (const t of state.tx) {
+      if (t.type !== 'expense' || ym(t.date) !== ymStr) continue;
+      if (t.link && t.link.kind === 'loan') o.loans += t.amount;
+      else if (t.link) o.bills += t.amount;
+      else o.daily += t.amount;
+      o.total += t.amount;
+    }
+    return o;
+  }
+  function categoryTotals(state, ymStr) {
+    const m = {};
+    for (const t of state.tx) if (t.type === 'expense' && ym(t.date) === ymStr) { const c = t.cat || 'سایر'; m[c] = (m[c] || 0) + t.amount; }
+    return m;
+  }
+  function cumulativeByDay(state, ymStr) {
+    const [y, m] = ymStr.split('/').map(Number), len = monthLen(y, m), arr = new Array(len).fill(0);
+    for (const t of state.tx) if (t.type === 'expense' && ym(t.date) === ymStr) arr[Math.min(len, jParse(t.date).d) - 1] += t.amount;
+    for (let i = 1; i < len; i++) arr[i] += arr[i - 1];
+    return arr;
+  }
+  // اقساط پرداخت‌نشده‌ی هر وام که سررسیدشون بعد از ماه داده‌شده است
+  function unpaidAfter(loan, ymStr) {
+    let n = 0; const lim = ymIndex(ymStr);
+    for (let i = 0; i < loan.count; i++) if (!(loan.paid || {})[i] && ymIndex(ym(loanDue(loan, i))) > lim) n++;
+    return n;
+  }
+  // روند بدهی: نقطه‌ی اول = مانده‌ی واقعی الان؛ بعد با فرض پرداخت طبق برنامه
+  function debtProjection(state, curYm, maxMonths) {
+    const pts = [{ ym: curYm, now: true, total: state.loans.reduce((s, l) => s + loanSummary(l).remainingAmount, 0) }];
+    for (let k = 0; k < maxMonths; k++) {
+      const m = addYm(curYm, k);
+      const total = state.loans.reduce((s, l) => s + unpaidAfter(l, m) * l.amount, 0);
+      pts.push({ ym: m, total });
+      if (!total) break;
+    }
+    return pts;
+  }
+  function debtFreeYm(state) {
+    let last = null;
+    for (const l of state.loans) for (let i = l.count - 1; i >= 0; i--) if (!(l.paid || {})[i]) { const m = ym(loanDue(l, i)); if (!last || m > last) last = m; break; }
+    return last;
+  }
+  function obligationForecast(state, curYm, n) {
+    const map = txAmountMap(state), out = [];
+    for (let k = 0; k < n; k++) {
+      const m = addYm(curYm, k), f = { ym: m, loans: 0, fixed: 0, variable: 0 };
+      for (const o of obligationsForMonth(state, m, map)) f[o.kind === 'loan' ? 'loans' : o.variable ? 'variable' : 'fixed'] += o.amount;
+      f.total = f.loans + f.fixed + f.variable; out.push(f);
+    }
+    return out;
+  }
+  // اقساطی که در n ماه آینده تموم می‌شن و پول ماهانه آزاد می‌کنن
+  function reliefWithin(state, curYm, n) {
+    const lim = addYm(curYm, n - 1); let amount = 0; const loans = [];
+    for (const l of state.loans) {
+      const s = loanSummary(l); if (!s.remainingCount) continue;
+      const last = ym(s.last);
+      if (last >= curYm && last <= lim) { amount += l.amount; loans.push(l.name); }
+    }
+    return { amount, loans };
+  }
+  // پرداخت به‌موقع: پرداخت‌های ثبت‌شده (نه «قبلی») که تاریخشون ≤ سررسید بوده
+  function onTimeRate(state, fromYm, toYm) {
+    let n = 0, ok = 0;
+    for (const l of state.loans) for (const k of Object.keys(l.paid || {})) {
+      const info = l.paid[k]; if (!info || info.prior || +k >= l.count) continue;
+      const due = loanDue(l, +k), m = ym(due); if (m < fromYm || m > toYm) continue;
+      n++; if ((info.date || '') <= due) ok++;
+    }
+    for (const f of state.fixed) for (const k of Object.keys(f.paid || {})) {
+      const info = f.paid[k]; if (!info || k < fromYm || k > toYm || !/^\d{4}\/\d{2}\/\d{2}$/.test(info.date || '')) continue;
+      const [y, m] = k.split('/').map(Number), due = jStr(y, m, Math.min(f.day, monthLen(y, m)));
+      n++; if (info.date <= due) ok++;
+    }
+    return { n, ok, rate: n ? ok / n : null };
+  }
+  function varianceOfVariable(state, ymStr) {
+    const items = obligationsForMonth(state, ymStr).filter(o => o.variable);
+    const paid = items.filter(o => o.paid);
+    return { items, est: paid.reduce((s, o) => s + o.estimate, 0), actual: paid.reduce((s, o) => s + o.amount, 0), paidCount: paid.length };
+  }
+  function kpis(state, ymStr, todayStr) {
+    const prev = addYm(ymStr, -1), st = monthStats(state, ymStr), stp = monthStats(state, prev);
+    const out = monthOutflow(state, ymStr), outp = monthOutflow(state, prev);
+    const [y, m] = ymStr.split('/').map(Number), len = monthLen(y, m);
+    const curYm = ym(todayStr), isCur = ymStr === curYm, isFuture = ymStr > curYm;
+    const days = isCur ? jParse(todayStr).d : isFuture ? 0 : len;
+    const loanOb = st.obs.filter(o => o.kind === 'loan').reduce((s, o) => s + o.amount, 0);
+    const loanObPrev = stp.obs.filter(o => o.kind === 'loan').reduce((s, o) => s + o.amount, 0);
+    const debtNow = state.loans.reduce((s, l) => s + loanSummary(l).remainingAmount, 0);
+    const free = debtFreeYm(state);
+    const income = st.base;
+    return {
+      ym: ymStr, prev, days, len, isCur,
+      progress: st.count ? st.obPaid / st.obTotal : null, paidCount: st.paidCount, count: st.count,
+      onTime: onTimeRate(state, addYm(ymStr, -5), ymStr),
+      loanLoad: loanOb, loanLoadPrev: loanObPrev,
+      outflow: out.total, outflowPrev: outp.total, outParts: out,
+      dailyAvg: days ? out.daily / days : 0, dailyProjected: days ? out.daily / days * len : 0,
+      debtNow, debtPaidThisMonth: out.loans,
+      debtFree: free, monthsToFree: free ? ymIndex(free) - ymIndex(curYm) : 0,
+      relief: reliefWithin(state, curYm, 3),
+      variance: varianceOfVariable(state, ymStr),
+      loanShare: out.total ? out.loans / out.total : null,
+      income, hasIncome: income > 0,
+      dti: income ? loanOb / income : null,
+      savingsRate: income ? (income - out.total) / income : null
+    };
   }
 
   root.Core = { toJ, toG, today, ym, addMonths, addYm, addDays, diffDays, monthLen, jParse, jStr, pad,
-    MONTHS, weekday, normDigits, faDigits, faNum, parseSMS, obligationsForMonth, monthStats, loanDue, loanSummary };
+    MONTHS, weekday, normDigits, faDigits, faNum, parseSMS, txAmountMap, obligationsForMonth, openObligations, monthStats, loanDue, loanSummary,
+    ymIndex, monthOutflow, categoryTotals, cumulativeByDay, debtProjection, debtFreeYm, obligationForecast, reliefWithin, onTimeRate, varianceOfVariable, kpis };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -1,34 +1,66 @@
-/* حساب‌وکتاب — اپ شخصی و آفلاین مدیریت مالی */
+/* FI — اپ شخصی و آفلاین مدیریت مالی (نسخه‌ی ۶) */
 (function () {
   'use strict';
   const C = window.Core;
   const { faNum, faDigits, today, ym, MONTHS } = C;
-  const KEY = 'hesab-v1';
+  const KEY = 'hesab-v1'; // نام قدیمی عمداً حفظ شده تا داده‌های قبلی از دست نرن
+  const VERSION = '۶';
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  let uidN = 0;
+  const uid = () => Date.now().toString(36) + (uidN++).toString(36) + Math.random().toString(36).slice(2, 6);
+  const reduceMotion = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- آیکون‌ها (SVG؛ جهتشون در راست‌به‌چپ آینه نمی‌شه) ----------
+  const svg = (d, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+  const IC = {
+    right: svg('<path d="m9 5 7 7-7 7"/>'),
+    left: svg('<path d="m15 5-7 7 7 7"/>'),
+    check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
+    out: svg('<path d="M12 19V5M6 11l6-6 6 6"/>'),
+    in: svg('<path d="M12 5v14M6 13l6 6 6-6"/>'),
+    paste: svg('<rect x="7" y="4" width="10" height="4" rx="1.5"/><path d="M8 6H6.5A1.5 1.5 0 0 0 5 7.5v11A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5v-11A1.5 1.5 0 0 0 17.5 6H16M9 13h6M9 16.5h4"/>'),
+    cal: svg('<rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M9 3v4M15 3v4"/>'),
+    x: svg('<path d="M6 6l12 12M18 6 6 18"/>'),
+    plus: svg('<path d="M12 5v14M5 12h14"/>'),
+    swap: svg('<path d="M7 7h11l-3-3M17 17H6l3 3"/>'),
+    down: svg('<path d="m6 9 6 6 6-6"/>')
+  };
 
   // ---------- ذخیره‌سازی ----------
   function defaults() {
     return {
-      v: 1,
+      v: 2,
       settings: { unit: 'toman', expectedIncome: 0, lastBackup: null },
       categories: {
         expense: ['سوپرمارکت', 'رستوران و کافه', 'حمل‌ونقل', 'قبض و شارژ', 'خرید', 'سلامت', 'تفریح', 'هدیه', 'خانه', 'سایر'],
         income: ['حقوق', 'پروژه', 'سایر درآمد']
       },
-      accounts: [], tx: [], loans: [], fixed: [], debts: []
+      accounts: [], tx: [], loans: [], fixed: [], debts: [], lastCat: {}
     };
+  }
+  function normalize(d) {
+    const s = Object.assign(defaults(), d || {});
+    s.settings = Object.assign(defaults().settings, s.settings || {});
+    s.categories = Object.assign(defaults().categories, s.categories || {});
+    for (const k of ['accounts', 'tx', 'loans', 'fixed', 'debts']) s[k] = Array.isArray(s[k]) ? s[k].filter(x => x && typeof x === 'object' && x.id) : [];
+    s.tx = s.tx.filter(t => typeof t.amount === 'number' && /^\d{4}\/\d{2}\/\d{2}$/.test(t.date || ''));
+    s.loans = s.loans.filter(l => l.count > 0 && /^\d{4}\/\d{2}\/\d{2}$/.test(l.first || ''));
+    s.loans.forEach(l => { l.paid = l.paid || {}; });
+    s.fixed.forEach(f => { f.paid = f.paid || {}; });
+    s.debts.forEach(x => { x.settles = x.settles || []; });
+    s.lastCat = s.lastCat || {};
+    return s;
   }
   let S;
   function load() {
-    try { const raw = localStorage.getItem(KEY); S = raw ? Object.assign(defaults(), JSON.parse(raw)) : defaults(); }
+    try { const raw = localStorage.getItem(KEY); S = normalize(raw ? JSON.parse(raw) : null); }
     catch (e) { S = defaults(); }
   }
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(S)); }
-    catch (e) { toast('ذخیره نشد: حافظه‌ی مرورگر پر است یا در دسترس نیست. از داده‌ها بکاپ بگیر.', 'bad'); }
+    try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
+    catch (e) { toast('ذخیره نشد: حافظه‌ی مرورگر در دسترس نیست. از داده‌ها بکاپ بگیر.', 'bad'); return false; }
   }
 
   // ---------- پول ----------
@@ -38,7 +70,8 @@
   const toRial = v => S.settings.unit === 'toman' ? v * 10 : v;
 
   // ---------- تاریخ ----------
-  const monthTitle = ymStr => { const [y, m] = ymStr.split('/').map(Number); return `${MONTHS[m - 1]} ${faDigits(y)}`; };
+  const monthName = ymStr => MONTHS[+ymStr.split('/')[1] - 1];
+  const monthTitle = ymStr => `${monthName(ymStr)} ${faDigits(ymStr.split('/')[0])}`;
   const dateTitle = js => { const { y, m, d } = C.jParse(js); return `${faDigits(d)} ${MONTHS[m - 1]}${y !== C.jParse(today()).y ? ' ' + faDigits(y) : ''}`; };
   const dateFull = js => { const { y, m, d } = C.jParse(js); return `${faDigits(d)} ${MONTHS[m - 1]} ${faDigits(y)}`; };
   function relDay(js) {
@@ -53,7 +86,7 @@
   function dateField(name, value, chips) {
     const { y, m, d } = C.jParse(value || today());
     const cy = C.jParse(today()).y;
-    let ys = ''; for (let i = cy - 4; i <= cy + 12; i++) ys += `<option value="${i}" ${i === y ? 'selected' : ''}>${faDigits(i)}</option>`;
+    let ys = ''; for (let i = Math.min(cy - 4, y); i <= Math.max(cy + 12, y); i++) ys += `<option value="${i}" ${i === y ? 'selected' : ''}>${faDigits(i)}</option>`;
     const ms = MONTHS.map((n, i) => `<option value="${i + 1}" ${i + 1 === m ? 'selected' : ''}>${n}</option>`).join('');
     let ds = ''; for (let i = 1; i <= 31; i++) ds += `<option value="${i}" ${i === d ? 'selected' : ''}>${faDigits(i)}</option>`;
     return `<div class="datef" data-date="${name}">
@@ -69,50 +102,60 @@
   }
   function setDate(root, name, js) {
     const w = $(`[data-date="${name}"]`, root); const { y, m, d } = C.jParse(js);
-    $('[data-p=y]', w).value = y; $('[data-p=m]', w).value = m; $('[data-p=d]', w).value = d;
+    const ysel = $('[data-p=y]', w);
+    if (![...ysel.options].some(o => +o.value === y)) ysel.insertAdjacentHTML('beforeend', `<option value="${y}">${faDigits(y)}</option>`);
+    ysel.value = y; $('[data-p=m]', w).value = m; $('[data-p=d]', w).value = d;
   }
   function ymField(name, value, allowEmpty) {
     const cy = C.jParse(today()).y;
     const [y, m] = value ? value.split('/').map(Number) : [0, 0];
     let ys = allowEmpty ? `<option value="">—</option>` : '';
-    for (let i = cy - 4; i <= cy + 12; i++) ys += `<option value="${i}" ${i === y ? 'selected' : ''}>${faDigits(i)}</option>`;
+    for (let i = Math.min(cy - 4, y || cy); i <= Math.max(cy + 12, y || cy); i++) ys += `<option value="${i}" ${i === y ? 'selected' : ''}>${faDigits(i)}</option>`;
     const ms = (allowEmpty ? `<option value="">—</option>` : '') + MONTHS.map((n, i) => `<option value="${i + 1}" ${i + 1 === m ? 'selected' : ''}>${n}</option>`).join('');
-    return `<div class="datef" data-ym="${name}"><select data-p="m" aria-label="ماه">${ms}</select><select data-p="y" aria-label="سال">${ys}</select></div>`;
+    return `<div class="datef ym" data-ym="${name}"><select data-p="m" aria-label="ماه">${ms}</select><select data-p="y" aria-label="سال">${ys}</select></div>`;
   }
   function readYm(root, name) {
     const w = $(`[data-ym="${name}"]`, root);
     const y = $('[data-p=y]', w).value, m = $('[data-p=m]', w).value;
     return y && m ? `${y}/${C.pad(m)}` : null;
   }
-  const amountInput = (name, rial, ph) =>
-    `<div class="amtwrap"><input class="amt" name="${name}" inputmode="numeric" autocomplete="off" placeholder="${ph || '۰'}" value="${rial ? faNum(disp(rial)) : ''}" data-orig="${rial || ''}" data-init="${rial ? faNum(disp(rial)) : ''}"><span>${unitLabel()}</span></div>`;
+  const amountInput = (name, rial, ph) => {
+    const shown = rial ? faNum(disp(rial)) : '';
+    return `<div class="amtwrap"><input class="amt" name="${name}" inputmode="numeric" autocomplete="off" placeholder="${ph || '۰'}" value="${shown}" data-orig="${rial || ''}" data-init="${shown}"><span>${unitLabel()}</span></div>`;
+  };
   function readAmount(root, name) {
     const inp = $(`[name="${name}"]`, root);
-    // اگه مبلغ دست نخورده، مقدار دقیق ریالی (مثلاً از پیامک) حفظ بشه
-    if (inp.dataset.orig && inp.value === inp.dataset.init) return Number(inp.dataset.orig);
-    const v = Number(C.normDigits(inp.value).replace(/[^\d]/g, ''));
-    return toRial(v || 0);
+    if (inp.dataset.orig && inp.value === inp.dataset.init) return Number(inp.dataset.orig); // مقدار دقیق ریالی دست‌نخورده
+    const v = Number(C.normDigits(inp.value).replace(/[^\d]/g, '').slice(0, 15));
+    return Math.round(toRial(v || 0));
   }
+  const readInt = el => Number(C.normDigits(el.value).replace(/\D/g, '').slice(0, 6)) || 0;
 
   // ---------- تعهدات ----------
-  function findOb(kind, id) { return kind === 'loan' ? S.loans.find(l => l.id === id) : S.fixed.find(f => f.id === id); }
+  const findOb = (kind, id) => kind === 'loan' ? S.loans.find(l => l.id === id) : S.fixed.find(f => f.id === id);
+  function getOb(kind, id, key) {
+    const rec = findOb(kind, id); if (!rec) return null;
+    const month = kind === 'loan' ? ym(C.loanDue(rec, +key)) : key;
+    return C.obligationsForMonth(S, month).find(o => o.kind === kind && o.id === id && o.key === String(key)) || null;
+  }
   function markPaid(kind, id, key, info) {
     const o = findOb(kind, id); if (!o) return;
-    o.paid = o.paid || {}; o.paid[key] = info;
+    o.paid = o.paid || {}; o.paid[String(key)] = info;
   }
   function unmarkPaid(kind, id, key) {
     const o = findOb(kind, id); if (!o || !o.paid) return;
-    const info = o.paid[key]; delete o.paid[key];
+    const info = o.paid[String(key)]; delete o.paid[String(key)];
     if (info && info.txId) {
       const t = S.tx.find(x => x.id === info.txId);
       if (t) { if (t.auto) S.tx = S.tx.filter(x => x !== t); else delete t.link; }
     }
   }
-  function openObligations(fromOffset = -3, toOffset = 1) {
-    const cur = ym(today()); let all = [];
-    for (let i = fromOffset; i <= toOffset; i++) all = all.concat(C.obligationsForMonth(S, C.addYm(cur, i)));
-    return all.filter(o => !o.paid);
-  }
+  function unlinkAllFor(id) { S.tx.forEach(t => { if (t.link && t.link.id === id) delete t.link; }); }
+  const obLabel = link => {
+    const o = findOb(link.kind, link.id); if (!o) return 'تعهد حذف‌شده';
+    return link.kind === 'loan' ? `${o.name}، قسط ${faDigits(+link.key + 1)}` : `${o.name}، ${monthTitle(link.key)}`;
+  };
+  const obDefaultCat = (kind, id) => (findOb(kind, id) || {}).cat || (kind === 'loan' ? 'قسط وام' : 'پرداخت ماهانه');
 
   // ---------- بدهی و طلب ----------
   const debtLeft = d => d.amount - (d.settles || []).reduce((s, x) => s + x.amount, 0);
@@ -131,22 +174,28 @@
     return a;
   }
   const accName = id => (S.accounts.find(a => a.id === id) || {}).name || '';
+  const accOptions = sel => `<option value="">بدون حساب</option>` + S.accounts.map(a => `<option value="${esc(a.id)}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
 
   // ---------- UI عمومی ----------
   let toastTimer;
-  function toast(msg, kind) {
-    const t = $('#toast'); t.textContent = msg; t.className = 'show ' + (kind || '');
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = '', 3200);
+  function toast(msg, kind, action) {
+    const t = $('#toast');
+    t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button">${esc(action.label)}</button>` : ''}`;
+    t.className = 'show ' + (kind || '');
+    if (action) $('button', t).onclick = () => { t.className = ''; action.fn(); };
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ''; }, action ? 5000 : 2800);
   }
   function openSheet(title, html, mount) {
     const ov = document.createElement('div'); ov.className = 'overlay';
     ov.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-      <div class="sheet-head"><h2>${esc(title)}</h2><button class="x" data-close aria-label="بستن">✕</button></div>
+      <div class="grab" aria-hidden="true"></div>
+      <div class="sheet-head"><h2>${esc(title)}</h2><button class="iconbtn" data-close aria-label="بستن">${IC.x}</button></div>
       <div class="sheet-body">${html}</div></div>`;
     document.body.appendChild(ov);
-    requestAnimationFrame(() => ov.classList.add('open'));
+    document.body.classList.add('locked');
+    requestAnimationFrame(() => requestAnimationFrame(() => ov.classList.add('open')));
     ov.addEventListener('click', e => { if (e.target === ov || e.target.closest('[data-close]')) closeSheet(ov); });
-    $$('.sheet input.amt', ov).forEach(bindAmount);
+    $$('input.amt', ov).forEach(bindAmount);
     $$('[data-setdate]', ov).forEach(b => b.addEventListener('click', () => {
       setDate(ov, b.closest('[data-date]').dataset.date, C.addDays(today(), +b.dataset.setdate));
     }));
@@ -154,14 +203,41 @@
     return ov;
   }
   function closeSheet(ov) {
-    ov = ov || $$('.overlay').pop(); if (!ov) return;
-    ov.classList.remove('open'); setTimeout(() => ov.remove(), 220);
+    ov = ov || $$('.overlay:not(.closing)').pop(); if (!ov || ov.classList.contains('closing')) return;
+    ov.classList.add('closing'); ov.classList.remove('open');
+    setTimeout(() => { ov.remove(); if (!$('.overlay')) document.body.classList.remove('locked'); }, reduceMotion() ? 0 : 260);
   }
+  const closeAll = () => $$('.overlay').forEach(x => closeSheet(x));
   function bindAmount(inp) {
     inp.addEventListener('input', () => {
-      const n = C.normDigits(inp.value).replace(/[^\d]/g, '');
+      const n = C.normDigits(inp.value).replace(/[^\d]/g, '').slice(0, 15);
       inp.value = n ? faNum(Number(n)) : '';
     });
+    inp.addEventListener('focus', () => { if (inp.value) setTimeout(() => inp.select(), 0); });
+  }
+  function once(btn, fn) { // جلوگیری از ثبت دوباره با دو بار لمس
+    btn.addEventListener('click', () => { if (btn.disabled) return; btn.disabled = true; try { if (fn() === false) btn.disabled = false; } catch (e) { btn.disabled = false; throw e; } });
+  }
+
+  // شمارش نرم عدد اصلی بعد از تغییر
+  const openFolds = new Set();
+  document.addEventListener('toggle', e => { const d = e.target; if (d.dataset && d.dataset.fold) d.open ? openFolds.add(d.dataset.fold) : openFolds.delete(d.dataset.fold); }, true);
+  const foldAttr = key => `data-fold="${key}" ${openFolds.has(key) ? 'open' : ''}`;
+  let lastHero = null;
+  function animateHero() {
+    const el = $('#heroNum'); if (!el) return;
+    const to = Number(el.dataset.v);
+    const from = lastHero; lastHero = to;
+    if (from === null || from === to || reduceMotion()) return;
+    const start = performance.now(), dur = 420;
+    const ease = x => 1 - Math.pow(1 - x, 3);
+    el.classList.add('ticking');
+    const step = now => {
+      const p = Math.min(1, (now - start) / dur);
+      el.textContent = faNum(disp(from + (to - from) * ease(p)));
+      if (p < 1) requestAnimationFrame(step); else { el.textContent = faNum(disp(to)); el.classList.remove('ticking'); }
+    };
+    requestAnimationFrame(step);
   }
 
   // ---------- صفحه‌ها ----------
@@ -172,145 +248,173 @@
     const v = $('#view');
     v.innerHTML = ({ home: homeView, tx: txView, ob: obView, rep: repView, set: setView })[tab]();
     $$('input.amt', v).forEach(bindAmount);
-    window.scrollTo(0, 0);
+    if (tab === 'home') animateHero(); else lastHero = null;
   }
+  function go(t) { tab = t; render(); window.scrollTo(0, 0); }
 
   function obRow(o) {
-    const late = o.due < today();
-    return `<li class="ob ${late ? 'late' : ''}">
-      <div class="ob-main"><strong>${esc(o.name)}</strong><span>${o.sub} · ${dateTitle(o.due)}</span></div>
-      <div class="ob-side"><b>${money(o.amount, false)}</b><em>${relDay(o.due)}</em></div>
-      <button class="btn small" data-act="pay" data-k="${o.kind}" data-id="${o.id}" data-key="${o.key}">پرداخت شد</button>
+    const late = !o.paid && o.due < today();
+    const soon = !o.paid && !late && C.diffDays(today(), o.due) <= 3;
+    return `<li class="ob ${o.paid ? 'paid' : ''} ${late ? 'late' : ''}">
+      <button class="tick" data-act="${o.paid ? 'unpay' : 'quickpay'}" data-k="${o.kind}" data-id="${esc(o.id)}" data-key="${esc(o.key)}"
+        aria-label="${o.paid ? 'برگرداندن پرداخت' : 'پرداخت'} ${esc(o.name)}" aria-pressed="${o.paid}">${IC.check}</button>
+      <button class="ob-body" data-act="pay" data-k="${o.kind}" data-id="${esc(o.id)}" data-key="${esc(o.key)}">
+        <span class="ob-main"><strong>${esc(o.name)}</strong><span>${o.sub}، ${dateTitle(o.due)}</span></span>
+        <span class="ob-side"><b>${o.variable && !o.paid ? '<i class="approx">حدود</i> ' : ''}${money(o.amount, false)}</b>
+        <em class="${late ? 'bad' : soon ? 'warn' : ''}">${o.paid ? 'پرداخت شد' : relDay(o.due)}</em></span>
+      </button>
     </li>`;
+  }
+
+  function monthStrip(cur, obs) {
+    const [y, m] = cur.split('/').map(Number), len = C.monthLen(y, m), t = today(), td = ym(t) === cur ? C.jParse(t).d : 0;
+    const byDay = {}; obs.forEach(o => { const d = C.jParse(o.due).d; (byDay[d] = byDay[d] || []).push(o); });
+    let cells = '';
+    for (let d = 1; d <= len; d++) {
+      const list = byDay[d] || [];
+      let state = '';
+      if (list.length) state = list.every(o => o.paid) ? 'p' : (td && d < td ? 'l' : 'u');
+      const lbl = d === 1 || d === len || d % 10 === 0 || d === td;
+      cells += `<span class="day ${d === td ? 'today' : ''}" ${list.length ? `title="${faDigits(d)}: ${esc(list.map(o => o.name).join('، '))}"` : ''}>
+        ${state ? `<i class="dot ${state}"></i>` : '<i></i>'}${lbl ? `<small>${faDigits(d)}</small>` : ''}</span>`;
+    }
+    return `<div class="strip" aria-hidden="true">${cells}</div>`;
   }
 
   function homeView() {
     const t = today(), cur = ym(t), st = C.monthStats(S, cur);
-    const { y, m, d } = C.jParse(t); const daysLeft = C.monthLen(y, m) - d + 1;
-    const due = openObligations(-3, 1).filter(o => o.due <= C.addDays(t, 7));
+    const overdue = C.openObligations(S, cur, -3, -1);
+    const overdueSum = overdue.reduce((s, o) => s + o.amount, 0);
+    const pct = st.obTotal ? Math.round(st.obPaid / st.obTotal * 100) : 0;
+    const unpaidList = overdue.concat(st.obs.filter(o => !o.paid));
+    const paidList = st.obs.filter(o => o.paid);
     const backupDays = S.settings.lastBackup ? Math.floor((Date.now() - S.settings.lastBackup) / 864e5) : null;
-    const hasData = S.tx.length + S.loans.length + S.fixed.length > 0;
+    const hasData = S.tx.length + S.loans.length + S.fixed.length + S.debts.length > 0;
     const needBackup = hasData && (backupDays === null || backupDays >= 7);
-    const neg = st.free < 0;
+    const { owe, owed } = debtTotals();
+    const totalLoanDebt = S.loans.reduce((s, l) => s + C.loanSummary(l).remainingAmount, 0);
     return `
-    <header class="top"><h1>${monthTitle(cur)}</h1><span>${C.weekday(t)} ${dateTitle(t)}</span></header>
-    <section class="hero ${neg ? 'deficit' : ''}">
-      <p class="hero-label">${neg ? 'کسری این ماه' : 'پول آزاد این ماه'}</p>
-      <p class="hero-num">${faNum(Math.abs(disp(st.free)))}<small>${unitLabel()}</small></p>
-      ${!neg && st.free > 0 ? `<p class="hero-daily">یعنی روزی حدود ${money(st.free / daysLeft)} تا آخر ${MONTHS[m - 1]}</p>` : ''}
+    <header class="top home-top"><div><p class="eyebrow">${C.weekday(t)} ${dateTitle(t)}</p><h1>${monthTitle(cur)}</h1></div><span class="brand" aria-label="FI">FI</span></header>
+    <section class="hero" aria-labelledby="heroLabel">
+      <p class="hero-label" id="heroLabel">${st.count ? (st.obRemaining ? `مانده‌ی پرداختی ${monthName(cur)}` : `همه‌ی تعهدات ${monthName(cur)} پرداخت شد`) : 'تعهدی برای این ماه ثبت نشده'}</p>
+      <p class="hero-num"><span id="heroNum" data-v="${st.obRemaining}">${faNum(disp(st.obRemaining))}</span><small>${unitLabel()}</small></p>
+      ${st.count ? `
+      <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="درصد پرداخت‌شده"><i style="width:${pct}%"></i></div>
+      <p class="hero-sub">${money(st.obPaid, false)} از ${money(st.obTotal)} پرداخت شده، ${faDigits(st.paidCount)} از ${faDigits(st.count)} مورد</p>
+      ${monthStrip(cur, st.obs)}` : `<p class="hero-sub">وام‌ها و پرداخت‌های ماهانه‌ت رو از تب «تعهدات» اضافه کن.</p>`}
       <dl class="eq">
-        <div><dt>درآمد${st.usedExpected ? ' <i>(پیش‌بینی)</i>' : ''}</dt><dd>${money(st.base, false)}</dd></div>
-        <div><dt>اقساط و پرداخت‌های ثابت${st.obPaid ? ` <i>(${faNum(disp(st.obPaid))} پرداخت‌شده)</i>` : ''}</dt><dd><bdi dir="ltr">${st.obTotal ? '−' : ''}${money(st.obTotal, false)}</bdi></dd></div>
-        <div><dt>خرج‌های روزمره</dt><dd><bdi dir="ltr">${st.variable ? '−' : ''}${money(st.variable, false)}</bdi></dd></div>
+        <div><dt>اقساط وام</dt><dd>${money(st.loanRemaining, false)}</dd></div>
+        ${st.fixedRemaining ? `<div><dt>پرداخت‌های ثابت</dt><dd>${money(st.fixedRemaining, false)}</dd></div>` : ''}
+        <div><dt>پرداخت‌های متغیر <i>(پیش‌بینی)</i></dt><dd>${st.varRemaining ? '<i class="approx">حدود</i> ' : ''}${money(st.varRemaining, false)}</dd></div>
+        ${overdueSum ? `<div class="bad"><dt>عقب‌افتاده از ماه‌های قبل</dt><dd>${money(overdueSum, false)}</dd></div>` : ''}
+        <div><dt>خرج روزمره‌ی این ماه</dt><dd>${money(st.variable, false)}</dd></div>
+        ${st.hasIncome ? `<div class="free"><dt>پول آزاد این ماه${st.usedExpected ? ' <i>(با درآمد پیش‌بینی)</i>' : ''}</dt><dd><bdi dir="ltr">${st.free < 0 ? '−' : ''}${money(Math.abs(st.free), false)}</bdi></dd></div>` : ''}
       </dl>
-      ${!st.base ? `<p class="hero-hint">درآمد این ماه هنوز ثبت نشده. <button class="linkbtn" data-act="goset">درآمد ماهانه رو در تنظیمات وارد کن</button> یا یه واریز ثبت کن.</p>` : ''}
     </section>
     <nav class="quick" aria-label="کارهای سریع">
-      <button data-act="add" data-type="expense"><span class="qi">−</span>ثبت برداشت</button>
-      <button data-act="paste"><span class="qi">⎘</span>چسباندن پیامک</button>
-      <button data-act="duelist"><span class="qi">✓</span>پرداخت قسط</button>
-      <button data-act="add" data-type="income"><span class="qi">+</span>ثبت واریز</button>
+      <button data-act="add" data-type="expense"><span class="qi out">${IC.out}</span>ثبت برداشت</button>
+      <button data-act="add" data-type="income"><span class="qi in">${IC.in}</span>ثبت واریز</button>
+      <button data-act="paste"><span class="qi">${IC.paste}</span>چسباندن پیامک</button>
+      <button data-act="duelist"><span class="qi">${IC.cal}</span>پرداخت قسط</button>
     </nav>
-    ${needBackup ? `<div class="banner"><span>${backupDays === null ? 'هنوز از داده‌ها بکاپ نگرفتی.' : `${faDigits(backupDays)} روزه که بکاپ نگرفتی.`} اگه گوشی عوض بشه یا Safari داده‌ها رو پاک کنه، بکاپ تنها راه برگشته.</span><button class="btn small" data-act="backup">بکاپ بگیر</button></div>` : ''}
+    ${needBackup ? `<div class="banner"><span>${backupDays === null ? 'هنوز از داده‌ها بکاپ نگرفتی.' : `${faDigits(backupDays)} روزه که بکاپ نگرفتی.`} اگه Safari داده‌ها رو پاک کنه یا گوشی عوض بشه، بکاپ تنها راه برگشته.</span><button class="btn small" data-act="backup">بکاپ بگیر</button></div>` : ''}
     <section class="block">
-      <h2>سررسیدهای نزدیک</h2>
-      ${due.length ? `<ul class="oblist">${due.map(obRow).join('')}</ul>` :
-        `<p class="empty">${S.loans.length + S.fixed.length ? 'تا یک هفته‌ی دیگه سررسیدی نداری.' : 'وام‌ها و پرداخت‌های ثابتت رو اضافه کن تا سررسیدها اینجا بیان.'} <button class="linkbtn" data-act="goob">اقساط و تعهدات</button></p>`}
+      <div class="block-head"><h2>پرداخت‌های ${monthName(cur)}</h2>${unpaidList.length ? `<span class="count">${faDigits(unpaidList.length)} مانده</span>` : ''}</div>
+      ${unpaidList.length ? `<ul class="oblist">${unpaidList.map(obRow).join('')}</ul>` :
+        `<p class="empty">${st.count ? 'همه‌ی پرداخت‌های این ماه انجام شده.' : 'هنوز تعهدی ثبت نشده.'} <button class="linkbtn" data-act="goob">تعهدات</button></p>`}
+      ${paidList.length ? `<details class="fold" ${foldAttr('homePaid')}><summary>${IC.down}پرداخت‌شده‌ها (${faDigits(paidList.length)})</summary><ul class="oblist">${paidList.map(obRow).join('')}</ul></details>` : ''}
     </section>
-    ${homeDebts()}
+    ${totalLoanDebt || owe || owed ? `<section class="block"><h2>کل بدهی و طلب</h2><div class="sums three">
+      <button class="sum" data-act="goloan"><span>مانده‌ی وام‌ها</span><b>${money(totalLoanDebt, false)}</b></button>
+      <button class="sum" data-act="godebt"><span>بدهی به اشخاص</span><b class="${owe ? 'neg' : ''}">${money(owe, false)}</b></button>
+      <button class="sum" data-act="godebt"><span>طلب از اشخاص</span><b class="${owed ? 'pos' : ''}">${money(owed, false)}</b></button></div></section>` : ''}
     ${S.accounts.length ? `<section class="block"><h2>موجودی حساب‌ها</h2><ul class="accs">${S.accounts.map(a => `
       <li><span>${esc(a.name)}</span><b>${a.balance === null ? '—' : money(a.balance)}</b>${a.stamp ? `<em>طبق آخرین پیامک، ${dateTitle(a.stamp.slice(0, 10))}</em>` : ''}</li>`).join('')}</ul></section>` : ''}
+    ${!st.hasIncome ? `<p class="footnote">درآمد صفر در نظر گرفته شده. اگه واریزی به‌عنوان درآمد ثبت کنی، «پول آزاد» هم حساب می‌شه.</p>` : ''}
     `;
   }
 
-  function homeDebts() {
-    if (!openDebts().length) return '';
-    const { owe, owed } = debtTotals(), t = today();
-    const soon = openDebts().filter(d => d.due && d.due <= C.addDays(t, 7)).sort((a, b) => a.due.localeCompare(b.due));
-    return `<section class="block"><h2>بدهی و طلب</h2>
-      <div class="sums"><button class="sumbtn" data-act="godebt"><span>بدهی من</span><b class="neg">${money(owe)}</b></button><button class="sumbtn" data-act="godebt"><span>طلب من</span><b class="pos">${money(owed)}</b></button></div>
-      ${soon.length ? `<ul class="oblist">${soon.map(debtRow).join('')}</ul>` : ''}</section>`;
-  }
-  function debtRow(d) {
-    const late = d.due && d.due < today();
-    return `<li class="ob ${late ? 'late' : ''}">
-      <div class="ob-main"><strong>${esc(debtTitle(d))}</strong><span>${d.due ? 'موعد ' + dateTitle(d.due) : 'بدون موعد'}${d.note ? ' · ' + esc(d.note) : ''}</span></div>
-      <div class="ob-side"><b class="${d.dir === 'owe' ? 'neg' : 'pos'}">${money(debtLeft(d), false)}</b>${d.due ? `<em>${relDay(d.due)}</em>` : ''}</div>
-      <button class="btn small" data-act="debt" data-id="${d.id}">${d.dir === 'owe' ? 'پرداخت کردم' : 'دریافت کردم'}</button>
-    </li>`;
-  }
-
-  function monthSwitch(cur, act) {
-    return `<div class="mswitch"><button data-act="${act}" data-d="-1" aria-label="ماه قبل">›</button><strong>${monthTitle(cur)}</strong><button data-act="${act}" data-d="1" aria-label="ماه بعد">‹</button></div>`;
-  }
+  // دکمه‌ی راست = ماه قبل (فلش به راست)، دکمه‌ی چپ = ماه بعد (فلش به چپ)
+  const monthSwitch = (cur, act) => `<div class="mswitch">
+    <button data-act="${act}" data-d="-1" aria-label="ماه قبل">${IC.right}</button>
+    <strong>${monthTitle(cur)}</strong>
+    <button data-act="${act}" data-d="1" aria-label="ماه بعد">${IC.left}</button></div>`;
 
   function txView() {
-    const list = S.tx.filter(t => ym(t.date) === txMonth && (txFilter === 'all' || t.type === txFilter))
-      .sort((a, b) => (b.date + (b.time || '')).localeCompare(a.date + (a.time || '')));
-    const st = C.monthStats(S, txMonth);
-    const out = S.tx.filter(t => ym(t.date) === txMonth && t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+    const inMonth = S.tx.filter(t => ym(t.date) === txMonth);
+    const list = inMonth.filter(t => txFilter === 'all' || t.type === txFilter)
+      .sort((a, b) => (b.date + (b.time || '')).localeCompare(a.date + (a.time || '')) || (b.created || 0) - (a.created || 0));
+    const inc = inMonth.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+    const out = inMonth.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
     const groups = {}; list.forEach(t => (groups[t.date] = groups[t.date] || []).push(t));
     return `
     <header class="top"><h1>تراکنش‌ها</h1></header>
     ${monthSwitch(txMonth, 'txm')}
-    <div class="sums"><div><span>درآمد</span><b class="pos">${money(st.income)}</b></div><div><span>خرج کل</span><b class="neg">${money(out)}</b></div></div>
-    <div class="chips seg">${[['all', 'همه'], ['expense', 'خرج'], ['income', 'درآمد'], ['transfer', 'انتقال']].map(([k, n]) =>
-      `<button class="chip ${txFilter === k ? 'on' : ''}" data-act="txf" data-f="${k}">${n}</button>`).join('')}</div>
+    <div class="sums"><div class="sum"><span>واریز (درآمد)</span><b class="pos">${money(inc)}</b></div><div class="sum"><span>برداشت (خرج)</span><b class="neg">${money(out)}</b></div></div>
+    <div class="chips seg" role="group" aria-label="فیلتر">${[['all', 'همه'], ['expense', 'برداشت'], ['income', 'واریز'], ['transfer', 'انتقال']].map(([k, n]) =>
+      `<button class="chip ${txFilter === k ? 'on' : ''}" data-act="txf" data-f="${k}" aria-pressed="${txFilter === k}">${n}</button>`).join('')}</div>
     ${list.length ? Object.keys(groups).map(dt => `
-      <section class="day"><h3>${C.weekday(dt)} ${dateTitle(dt)}</h3><ul class="txlist">${groups[dt].map(txRow).join('')}</ul></section>`).join('')
+      <section class="day-group"><h3>${C.weekday(dt)} ${dateTitle(dt)}</h3><ul class="txlist">${groups[dt].map(txRow).join('')}</ul></section>`).join('')
       : `<p class="empty">توی ${monthTitle(txMonth)} تراکنشی ثبت نشده.</p>`}
-    <button class="fab" data-act="add" data-type="expense" aria-label="ثبت تراکنش">+</button>`;
+    <button class="fab" data-act="chooser" aria-label="ثبت تراکنش">${IC.plus}</button>`;
   }
   function txRow(t) {
-    const sign = t.type === 'income' ? '+' : t.type === 'expense' ? '−' : '⇄';
-    const sub = [t.link ? 'قسط/تعهد' : '', accName(t.account), t.time ? faDigits(t.time) : ''].filter(Boolean).join(' · ');
-    return `<li><button class="txrow" data-act="edit" data-id="${t.id}">
-      <span class="tx-main"><strong>${esc(t.cat || (t.debt ? 'بدهی و طلب' : t.type === 'transfer' ? 'انتقال داخلی' : 'بدون دسته'))}</strong>${t.note ? `<span>${esc(t.note)}</span>` : ''}${sub ? `<span class="meta">${sub}</span>` : ''}</span>
+    const sign = t.type === 'income' ? '+' : t.type === 'expense' ? '−' : '';
+    const title = t.cat || (t.debt ? 'بدهی و طلب' : t.type === 'transfer' ? 'انتقال داخلی' : 'بدون دسته');
+    const sub = [t.link ? 'قسط/تعهد' : '', accName(t.account), t.time ? faDigits(t.time) : ''].filter(Boolean).map(esc).join('، ');
+    return `<li><button class="txrow" data-act="edit" data-id="${esc(t.id)}">
+      <span class="txi ${t.type}">${t.type === 'income' ? IC.in : t.type === 'expense' ? IC.out : IC.swap}</span>
+      <span class="tx-main"><strong>${esc(title)}</strong>${t.note ? `<span>${esc(t.note)}</span>` : ''}${sub ? `<span class="meta">${sub}</span>` : ''}</span>
       <b class="${t.type === 'income' ? 'pos' : t.type === 'expense' ? 'neg' : ''}"><bdi dir="ltr">${sign}${money(t.amount, false)}</bdi></b></button></li>`;
   }
 
   function obView() {
+    const cur = ym(today());
     const loanCard = l => {
       const s = C.loanSummary(l); const pct = Math.round(s.paidCount / l.count * 100);
-      return `<li><button class="card loan" data-act="loan" data-id="${l.id}">
+      return `<li><button class="card loan" data-act="loan" data-id="${esc(l.id)}">
         <div class="lc-top"><strong>${esc(l.name)}</strong><span>${esc(l.lender || '')}</span></div>
-        <div class="bar" role="img" aria-label="${faDigits(pct)} درصد پرداخت شده"><i style="width:${pct}%"></i></div>
+        <div class="meter light" aria-hidden="true"><i style="width:${pct}%"></i></div>
         <div class="lc-grid">
           <div><span>قسط ماهانه</span><b>${money(l.amount, false)}</b></div>
           <div><span>پرداخت‌شده</span><b>${faDigits(s.paidCount)} از ${faDigits(l.count)}</b></div>
           <div><span>مانده‌ی بدهی</span><b>${money(s.remainingAmount, false)}</b></div>
-          <div><span>${s.next ? 'قسط بعدی' : 'وضعیت'}</span><b>${s.next ? dateTitle(s.next.due) : 'تسویه شد'}</b></div>
+          <div><span>${s.next ? 'قسط بعدی' : 'وضعیت'}</span><b class="${s.next && s.next.due < today() ? 'neg' : ''}">${s.next ? dateTitle(s.next.due) : 'تسویه شد'}</b></div>
         </div>
         ${s.remainingCount ? `<p class="lc-end">آخرین قسط: ${dateFull(s.last)}</p>` : ''}
       </button></li>`;
     };
     const activeL = S.loans.filter(l => C.loanSummary(l).remainingCount > 0), doneL = S.loans.filter(l => C.loanSummary(l).remainingCount <= 0);
-    const loans = activeL.map(loanCard).join('') ;
-    const loansDone = doneL.length ? `<details class="closed"><summary>تسویه‌شده‌ها (${faDigits(doneL.length)})</summary><ul class="cards">${doneL.map(loanCard).join('')}</ul></details>` : '';
-    const cur = ym(today());
     const fixedCard = f => {
       const active = (!f.start || cur >= f.start) && (!f.end || cur <= f.end);
       const paid = f.paid && f.paid[cur];
-      return `<li><button class="card fixed" data-act="fixed" data-id="${f.id}">
+      return `<li><button class="card fixed" data-act="fixed" data-id="${esc(f.id)}">
         <div class="lc-top"><strong>${esc(f.name)}</strong><span>روز ${faDigits(f.day)} هر ماه</span></div>
-        <div class="fx-row"><b>${money(f.amount)}</b><em class="${paid ? 'ok' : ''}">${!active ? 'غیرفعال' : paid ? 'این ماه پرداخت شد' : 'این ماه پرداخت نشده'}</em></div>
+        <div class="fx-row"><b>${f.variable ? '<i class="approx">حدود</i> ' : ''}${money(f.amount)}</b>
+          <em class="${paid ? 'ok' : active ? 'warn' : ''}">${!active ? 'غیرفعال' : paid ? 'این ماه پرداخت شد' : 'این ماه پرداخت نشده'}</em></div>
+        ${f.variable ? `<span class="tag">متغیر، پیش‌بینی</span>` : ''}
       </button></li>`;
     };
     const fxActive = S.fixed.filter(f => !f.end || f.end >= cur), fxEnded = S.fixed.filter(f => f.end && f.end < cur);
-    const fixed = fxActive.map(fixedCard).join('') + (fxEnded.length ? `</ul><details class="closed"><summary>پایان‌یافته‌ها (${faDigits(fxEnded.length)})</summary><ul class="cards">${fxEnded.map(fixedCard).join('')}</ul></details><ul class="cards">` : '');
     const totalDebt = S.loans.reduce((s, l) => s + C.loanSummary(l).remainingAmount, 0);
-    const monthly = C.obligationsForMonth(S, cur).reduce((s, o) => s + o.amount, 0);
+    const monthly = C.monthStats(S, cur).obTotal;
+    const fold = (title, items, key) => items ? `<details class="fold" ${foldAttr(key)}><summary>${IC.down}${title}</summary><ul class="cards">${items}</ul></details>` : '';
+    let body = '';
+    if (obTab === 'loan') {
+      body = (activeL.length ? `<ul class="cards">${activeL.map(loanCard).join('')}</ul>` : `<p class="empty">${doneL.length ? 'وام فعالی نداری.' : 'وامی ثبت نشده. مبلغ قسط، تعداد اقساط و تاریخ اولین قسط رو از قرارداد بردار.'}</p>`)
+        + fold(`تسویه‌شده‌ها (${faDigits(doneL.length)})`, doneL.map(loanCard).join(''), 'loansDone')
+        + `<button class="btn wide" data-act="newloan">${IC.plus}افزودن وام یا خرید قسطی</button>`;
+    } else if (obTab === 'fixed') {
+      body = (fxActive.length ? `<ul class="cards">${fxActive.map(fixedCard).join('')}</ul>` : `<p class="empty">قبض‌ها، اشتراک‌ها و هر پرداختی که هر ماه تکرار می‌شه رو اینجا اضافه کن. اگه مبلغش هر ماه فرق می‌کنه، «متغیر» علامتش بزن.</p>`)
+        + fold(`پایان‌یافته‌ها (${faDigits(fxEnded.length)})`, fxEnded.map(fixedCard).join(''), 'fixedEnded')
+        + `<button class="btn wide" data-act="newfixed">${IC.plus}افزودن پرداخت ماهانه</button>`;
+    } else body = debtList();
     return `
-    <header class="top"><h1>اقساط و تعهدات</h1></header>
-    ${obTab !== 'debt' ? `<div class="sums"><div><span>تعهد این ماه</span><b>${money(monthly)}</b></div><div><span>کل مانده‌ی وام‌ها</span><b>${money(totalDebt)}</b></div></div>` : ''}
-    <div class="chips seg"><button class="chip ${obTab === 'loan' ? 'on' : ''}" data-act="obt" data-t="loan">وام‌ها</button><button class="chip ${obTab === 'fixed' ? 'on' : ''}" data-act="obt" data-t="fixed">پرداخت‌های ثابت</button><button class="chip ${obTab === 'debt' ? 'on' : ''}" data-act="obt" data-t="debt">بدهی و طلب</button></div>
-    ${obTab === 'loan'
-      ? (loans ? `<ul class="cards">${loans}</ul>` : `<p class="empty">${doneL.length ? 'وام فعالی نداری.' : 'وامی ثبت نشده. مبلغ قسط، تعداد اقساط و تاریخ اولین قسط رو از قرارداد بانک بردار.'}</p>`) + loansDone
-      : obTab === 'fixed' ? (fixed ? `<ul class="cards">${fixed}</ul>` : `<p class="empty">اجاره، شارژ ساختمان، اشتراک‌ها و هر پرداختی که هر ماه تکرار می‌شه رو اینجا اضافه کن.</p>`)
-      : debtList()}
-    ${obTab === 'debt'
-      ? `<div class="btnrow"><button class="btn wide" data-act="newdebt" data-dir="owe">بدهکارم به…</button><button class="btn wide ghost" data-act="newdebt" data-dir="owed">طلبکارم از…</button></div>`
-      : `<button class="btn wide" data-act="${obTab === 'loan' ? 'newloan' : 'newfixed'}">${obTab === 'loan' ? 'افزودن وام' : 'افزودن پرداخت ثابت'}</button>`}`;
+    <header class="top"><h1>تعهدات</h1></header>
+    ${obTab !== 'debt' ? `<div class="sums"><div class="sum"><span>تعهد ${monthName(cur)}</span><b>${money(monthly)}</b></div><div class="sum"><span>کل مانده‌ی وام‌ها</span><b>${money(totalDebt)}</b></div></div>` : ''}
+    <div class="chips seg" role="group" aria-label="نوع تعهد">${[['loan', 'وام و اقساط'], ['fixed', 'پرداخت ماهانه'], ['debt', 'بدهی و طلب']].map(([k, n]) =>
+      `<button class="chip ${obTab === k ? 'on' : ''}" data-act="obt" data-t="${k}" aria-pressed="${obTab === k}">${n}</button>`).join('')}</div>
+    ${body}`;
   }
   function debtList() {
     const { owe, owed } = debtTotals();
@@ -318,141 +422,301 @@
     const done = S.debts.filter(d => debtLeft(d) <= 0).sort((a, b) => (b.closed || '').localeCompare(a.closed || ''));
     const card = d => {
       const left = debtLeft(d), paid = d.amount - left;
-      return `<li><button class="card debt ${d.dir}" data-act="debtd" data-id="${d.id}">
+      return `<li><button class="card debt ${d.dir}" data-act="debtd" data-id="${esc(d.id)}">
         <div class="lc-top"><strong>${esc(debtTitle(d))}</strong><span>${left > 0 ? (d.due ? 'موعد ' + dateTitle(d.due) : 'بدون موعد') : 'تسویه شد'}</span></div>
         <div class="fx-row"><b class="${left > 0 ? (d.dir === 'owe' ? 'neg' : 'pos') : ''}">${money(left > 0 ? left : d.amount)}</b>${paid > 0 && left > 0 ? `<em>${money(paid, false)} از ${money(d.amount, false)} تسویه شده</em>` : ''}</div>
         ${d.note ? `<p class="lc-end">${esc(d.note)}</p>` : ''}
       </button></li>`;
     };
-    return `<div class="sums"><div><span>بدهی من</span><b class="neg">${money(owe)}</b></div><div><span>طلب من</span><b class="pos">${money(owed)}</b></div></div>
+    return `<div class="sums"><div class="sum"><span>بدهی من</span><b class="neg">${money(owe)}</b></div><div class="sum"><span>طلب من</span><b class="pos">${money(owed)}</b></div></div>
       ${open.length ? `<ul class="cards">${open.map(card).join('')}</ul>` : `<p class="empty">بدهی یا طلب بازی نداری.</p>`}
-      ${done.length ? `<details class="closed"><summary>تسویه‌شده‌ها (${faDigits(done.length)})</summary><ul class="cards">${done.map(card).join('')}</ul></details>` : ''}`;
+      ${done.length ? `<details class="fold" ${foldAttr('debtsDone')}><summary>${IC.down}تسویه‌شده‌ها (${faDigits(done.length)})</summary><ul class="cards">${done.map(card).join('')}</ul></details>` : ''}
+      <div class="btnrow"><button class="btn wide" data-act="newdebt" data-dir="owe">بدهکارم به…</button><button class="btn wide ghost" data-act="newdebt" data-dir="owed">طلبکارم از…</button></div>`;
   }
 
+  // ---------- نمودارها (SVG دست‌ساز؛ زمان از راست به چپ) ----------
+  function shortMoney(rial) {
+    const v = Math.abs(disp(rial)), sign = rial < 0 ? '−' : '';
+    const f = (x, d) => faDigits((+x.toFixed(d)).toString()).replace('.', '٫');
+    if (v >= 1e9) return sign + f(v / 1e9, 1) + ' میلیارد';
+    if (v >= 1e6) return sign + f(v / 1e6, v >= 1e8 ? 0 : 1) + ' م';
+    if (v >= 1e3) return sign + f(v / 1e3, 0) + ' هزار';
+    return sign + faNum(v);
+  }
+  const pct = (x, d = 0) => x === null || x === undefined || !isFinite(x) ? '—' : faDigits((x * 100).toFixed(d)).replace('.', '٫') + '٪';
+  function niceMax(v) {
+    if (v <= 0) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const f of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (f * p >= v) return f * p;
+    return 10 * p;
+  }
+  const W = 340, PR = 46, PL = 6, PT = 10, PB = 26;
+  function axis(max, H) {
+    const ph = H - PT - PB; let g = '';
+    for (const f of [0, 0.5, 1]) {
+      const y = PT + ph * (1 - f);
+      g += `<line class="grid" x1="${PL}" x2="${W - PR}" y1="${y}" y2="${y}"/><text class="ax" x="${W - 2}" y="${y + 4}" text-anchor="end">${f ? shortMoney(max * f) : '۰'}</text>`;
+    }
+    return g;
+  }
+  // ستونی (انباشته یا گروهی) + خط اختیاری؛ tips: متن هر ستون برای لمس
+  function barChart({ labels, series, stacked = true, line = null, tips, H = 180, labelEvery = 1 }) {
+    const n = labels.length, pw = W - PR - PL, ph = H - PT - PB, step = pw / n;
+    const tot = i => stacked ? series.reduce((s, se) => s + se.values[i], 0) : Math.max(...series.map(se => se.values[i]));
+    const max = niceMax(Math.max(1, ...labels.map((_, i) => tot(i)), ...(line ? line.values : [0])));
+    const y = v => PT + ph * (1 - v / max);
+    let g = axis(max, H), hits = '';
+    labels.forEach((lab, i) => {
+      const cx = PL + pw - step * (i + 0.5);
+      if (stacked) {
+        const bw = Math.min(26, step * 0.58); let acc = 0;
+        series.forEach(se => { const v = se.values[i]; if (v > 0) { g += `<rect class="${se.cls}" x="${cx - bw / 2}" y="${y(acc + v)}" width="${bw}" height="${Math.max(1, y(acc) - y(acc + v))}" rx="3"/>`; } acc += v; });
+      } else {
+        const k = series.length, bw = Math.min(16, step * 0.8 / k);
+        series.forEach((se, j) => { const v = se.values[i]; const x = cx + (k / 2 - j - 1) * bw; if (v > 0) g += `<rect class="${se.cls}" x="${x + 1}" y="${y(v)}" width="${bw - 2}" height="${Math.max(1, y(0) - y(v))}" rx="3"/>`; });
+      }
+      if (i % labelEvery === 0) g += `<text class="ax" x="${cx}" y="${H - 8}" text-anchor="middle">${esc(lab)}</text>`;
+      hits += `<rect class="hit" x="${cx - step / 2}" y="${PT}" width="${step}" height="${ph}" data-tip="${esc(tips[i])}"/>`;
+    });
+    if (line) {
+      const pts = line.values.map((v, i) => `${PL + pw - step * (i + 0.5)},${y(v)}`);
+      g += `<polyline class="ln ${line.cls}" points="${pts.join(' ')}"/>` + line.values.map((v, i) => `<circle class="${line.cls}" cx="${PL + pw - step * (i + 0.5)}" cy="${y(v)}" r="3"/>`).join('');
+    }
+    return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img">${g}${hits}</svg>`;
+  }
+  function lineChart({ labels, series, tips, H = 180, labelEvery = 1, area = false }) {
+    const n = labels.length, pw = W - PR - PL, ph = H - PT - PB;
+    const max = niceMax(Math.max(1, ...series.flatMap(se => se.values.filter(v => v !== null))));
+    const x = i => n === 1 ? PL + pw / 2 : PL + pw - pw * i / (n - 1), y = v => PT + ph * (1 - v / max);
+    let g = axis(max, H), hits = '';
+    series.forEach(se => {
+      const pts = se.values.map((v, i) => v === null ? null : `${x(i)},${y(v)}`).filter(Boolean);
+      if (area && pts.length) g += `<polygon class="area ${se.cls}" points="${x(0)},${y(0)} ${pts.join(' ')} ${x(se.values.filter(v => v !== null).length - 1)},${y(0)}"/>`;
+      g += `<polyline class="ln ${se.cls} ${se.dash ? 'dash' : ''}" points="${pts.join(' ')}"/>`;
+    });
+    const step = n > 1 ? pw / (n - 1) : pw;
+    labels.forEach((lab, i) => {
+      if (lab && i % labelEvery === 0) g += `<text class="ax" x="${x(i)}" y="${H - 8}" text-anchor="middle">${esc(lab)}</text>`;
+      hits += `<rect class="hit" x="${x(i) - step / 2}" y="${PT}" width="${step}" height="${ph}" data-tip="${esc(tips[i])}"/>`;
+    });
+    return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img">${g}${hits}</svg>`;
+  }
+  function donut(segs, centerTop, centerBottom) {
+    const total = segs.reduce((s, x) => s + x.value, 0) || 1, r = 54, c = 2 * Math.PI * r; let off = 0, g = '';
+    segs.forEach(sg => {
+      const len = sg.value / total * c;
+      g += `<circle class="seg ${sg.cls}" cx="70" cy="70" r="${r}" stroke-dasharray="${Math.max(0, len - 1.5)} ${c}" stroke-dashoffset="${-off}" data-tip="${esc(sg.tip)}"/>`;
+      off += len;
+    });
+    return `<svg class="donut" viewBox="0 0 140 140" role="img"><g transform="rotate(-90 70 70)">${g}</g>
+      <text x="70" y="66" text-anchor="middle" class="dc1">${esc(centerTop)}</text><text x="70" y="86" text-anchor="middle" class="dc2">${esc(centerBottom)}</text></svg>`;
+  }
+  const figure = (title, sub, svgHtml, legend, hint = 'روی نمودار بزن تا عددها رو ببینی') => `<figure class="chart card-block">
+    <h2>${title}</h2>${sub ? `<p class="note">${sub}</p>` : ''}${svgHtml}
+    ${legend ? `<div class="legend">${legend.map(([cls, name]) => `<span><i class="k ${cls}"></i>${name}</span>`).join('')}</div>` : ''}
+    <figcaption class="tip">${hint}</figcaption></figure>`;
+  function delta(cur, prev, lowerBetter = true, label = '') {
+    if (!prev && !cur) return `<span class="k-s">بدون تغییر</span>`;
+    if (!prev) return `<span class="k-s">ماه قبل: ۰</span>`;
+    const d = (cur - prev) / prev, up = d > 0, good = lowerBetter ? !up : up;
+    if (Math.abs(d) < 0.005) return `<span class="k-s">مثل ${label}</span>`;
+    return `<span class="k-s ${good ? 'up-good' : 'up-bad'}">${up ? '▲' : '▼'} ${pct(Math.abs(d))} نسبت به ${label}</span>`;
+  }
+  const kpi = (label, value, sub, tone = '', help = '') => `<div class="kpi ${tone}" ${help ? `title="${esc(help)}"` : ''}><span class="k-l">${label}</span><b class="k-v">${value}</b>${sub || ''}</div>`;
+
   function repView() {
-    const txs = S.tx.filter(t => ym(t.date) === repMonth && t.type === 'expense' && !t.link);
-    const byCat = {}; txs.forEach(t => byCat[t.cat || 'سایر'] = (byCat[t.cat || 'سایر'] || 0) + t.amount);
-    const st = C.monthStats(S, repMonth);
-    if (st.obPaid) byCat['اقساط و تعهدات'] = st.obPaid;
-    const rows = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
-    const max = rows.length ? rows[0][1] : 1;
-    const months = []; for (let i = -5; i <= 0; i++) months.push(C.addYm(repMonth, i));
-    const hist = months.map(mm => { const s = C.monthStats(S, mm); return { mm, inc: s.income, out: s.variable + s.obPaid }; });
-    const hmax = Math.max(1, ...hist.map(h => Math.max(h.inc, h.out)));
-    const cur = ym(today());
+    const t = today(), cur = ym(t), K = C.kpis(S, repMonth, t), pm = monthName(K.prev);
+    const tone = (v, good, bad, higherBetter = true) => v === null ? '' : higherBetter ? (v >= good ? 'good' : v < bad ? 'bad' : 'warn') : (v <= good ? 'good' : v > bad ? 'bad' : 'warn');
+    const V = K.variance, varDiff = V.actual - V.est;
+    const cards = [
+      kpi('پرداخت به‌موقع', pct(K.onTime.rate), `<span class="k-s">${K.onTime.n ? `${faDigits(K.onTime.ok)} از ${faDigits(K.onTime.n)} پرداخت، ۶ ماه اخیر` : 'هنوز پرداختی ثبت نشده'}</span>`, tone(K.onTime.rate, 0.95, 0.8),
+        'درصد اقساط و قبض‌هایی که تا روز سررسید پرداخت شدن'),
+      kpi('پیشرفت تعهدات ماه', pct(K.progress), `<span class="k-s">${faDigits(K.paidCount)} از ${faDigits(K.count)} مورد</span>`, K.progress === 1 ? 'good' : ''),
+      kpi('بار اقساط ماهانه', shortMoney(K.loanLoad), delta(K.loanLoad, K.loanLoadPrev, true, pm), '', 'جمع اقساط وام‌ها و خریدهای قسطی این ماه'),
+      kpi('کل خرج ماه', shortMoney(K.outflow), delta(K.outflow, K.outflowPrev, true, pm), '', 'همه‌ی برداشت‌ها: اقساط، قبض‌ها و خرج روزمره'),
+      kpi('خرج روزمره‌ی روزانه', K.days ? shortMoney(K.dailyAvg) : '—', K.isCur && K.days ? `<span class="k-s">با این روند تا آخر ماه: ${shortMoney(K.dailyProjected)}</span>` : `<span class="k-s">میانگین ${faDigits(K.days)} روز</span>`),
+      kpi('کل بدهی وام‌ها', shortMoney(K.debtNow), `<span class="k-s">${K.debtPaidThisMonth ? `${shortMoney(K.debtPaidThisMonth)} کم شد در ${monthName(repMonth)}` : 'در این ماه قسطی پرداخت نشده'}</span>`),
+      kpi('آزادی از بدهی', K.debtFree ? monthTitle(K.debtFree) : 'بدهی نداری', `<span class="k-s">${K.debtFree ? `${faDigits(Math.max(0, K.monthsToFree))} ماه دیگه، اگه طبق برنامه پیش بری` : ''}</span>`, K.debtFree ? '' : 'good'),
+      kpi('آزاد شدن تا ۳ ماه آینده', K.relief.amount ? shortMoney(K.relief.amount) + ' <small>در ماه</small>' : '—', `<span class="k-s">${K.relief.loans.length ? esc(K.relief.loans.slice(0, 3).join('، ')) + (K.relief.loans.length > 3 ? '…' : '') + ' تموم می‌شن' : 'قسطی در این بازه تموم نمی‌شه'}</span>`, K.relief.amount ? 'good' : ''),
+      kpi('قبض‌های متغیر نسبت به پیش‌بینی', V.est ? pct(V.actual / V.est) : '—', `<span class="k-s ${V.est ? (varDiff > 0 ? 'up-bad' : 'up-good') : ''}">${V.est ? `${shortMoney(Math.abs(varDiff))} ${varDiff > 0 ? 'بیشتر' : 'کمتر'} از پیش‌بینی` : 'هنوز قبض متغیری پرداخت نشده'}</span>`, '', 'مبلغ واقعی قبض‌های متغیر نسبت به مبلغ پیش‌بینی'),
+      kpi('سهم اقساط از خرج', pct(K.loanShare), `<span class="k-s">از کل ${shortMoney(K.outflow)}</span>`)
+    ];
+    if (K.hasIncome) cards.push(
+      kpi('نسبت بدهی به درآمد', pct(K.dti), `<span class="k-s">${K.dti <= 0.36 ? 'سالم (زیر ۳۶٪)' : K.dti <= 0.43 ? 'مرزی (۳۶ تا ۴۳٪)' : 'پرخطر (بالای ۴۳٪)'}</span>`, tone(K.dti, 0.36, 0.43, false), 'اقساط ماه تقسیم بر درآمد'),
+      kpi('نرخ پس‌انداز', pct(K.savingsRate), `<span class="k-s">درآمد منهای کل خرج</span>`, tone(K.savingsRate, 0.2, 0)));
+    else cards.push(`<div class="kpi muted span2"><span class="k-l">با ثبت درآمد</span><span class="k-s">«نسبت بدهی به درآمد» و «نرخ پس‌انداز» هم محاسبه می‌شن.</span></div>`);
+
+    // ۱) تعهدات ۱۲ ماه آینده
+    const fc = C.obligationForecast(S, cur, 12);
+    const fcChart = barChart({ labels: fc.map(f => monthName(f.ym).slice(0, 3)), labelEvery: 2,
+      series: [{ cls: 'c1', values: fc.map(f => f.loans) }, { cls: 'c2', values: fc.map(f => f.fixed) }, { cls: 'c3', values: fc.map(f => f.variable) }],
+      tips: fc.map(f => `${monthTitle(f.ym)}: جمع ${money(f.total)} (اقساط ${shortMoney(f.loans)}، ثابت ${shortMoney(f.fixed)}، متغیر ${shortMoney(f.variable)})`) });
+    const drop = fc.length > 1 ? fc[0].total - Math.min(...fc.slice(1).map(f => f.total)) : 0;
+    // ۲) روند بدهی
+    const full = C.debtProjection(S, cur, 240), long = full.length > 25;
+    const stepP = full.length > 37 ? Math.ceil((full.length - 1) / 36) : 1;
+    const pr = full.filter((p, i) => i === 0 || i % stepP === 0 || i === full.length - 1);
+    const yearsSpan = long ? +full[full.length - 1].ym.slice(0, 4) - +cur.slice(0, 4) : 0;
+    const prLabels = pr.map((p, i) => {
+      if (i === 0) return 'الان';
+      if (!long) return i % 3 === 0 ? monthName(p.ym).slice(0, 3) : '';
+      const y = +p.ym.slice(0, 4), py = +pr[i - 1].ym.slice(0, 4);
+      return y !== py && (yearsSpan <= 8 || y % 2 === 0) ? faDigits(y) : '';
+    });
+    const prChart = pr.length > 1 ? lineChart({ labels: prLabels, area: true,
+      series: [{ cls: 'c1', values: pr.map(p => p.total) }],
+      tips: pr.map((p, i) => i === 0 ? `الان: ${money(p.total)} بدهی` : `پایان ${monthTitle(p.ym)}: ${money(p.total)}`) }) : '';
+    // ۳) خرج ماه به ماه
+    const months = []; for (let i = 0; i < 6; i++) months.push(C.addYm(repMonth, -i));
+    const outs = months.map(m => C.monthOutflow(S, m)), incs = months.map(m => C.monthStats(S, m).income);
+    const hasInc = incs.some(v => v > 0);
+    const mmChart = barChart({ labels: months.map(m => monthName(m).slice(0, 3)),
+      series: [{ cls: 'c1', values: outs.map(o => o.loans) }, { cls: 'c2', values: outs.map(o => o.bills) }, { cls: 'c4', values: outs.map(o => o.daily) }],
+      line: hasInc ? { cls: 'c5', values: incs } : null,
+      tips: months.map((m, i) => `${monthTitle(m)}: خرج ${money(outs[i].total)}${hasInc ? `، درآمد ${money(incs[i])}` : ''}`) });
+    // ۴) خرج تجمعی: این ماه در برابر ماه قبل
+    const cA = C.cumulativeByDay(S, repMonth), cB = C.cumulativeByDay(S, K.prev), L = Math.max(cA.length, cB.length);
+    const lastDay = K.isCur ? K.days : cA.length;
+    const cumChart = lineChart({ labels: Array.from({ length: L }, (_, i) => (i + 1) % 5 === 0 || i === 0 ? faDigits(i + 1) : ''),
+      series: [{ cls: 'c6', dash: true, values: Array.from({ length: L }, (_, i) => i < cB.length ? cB[i] : null) },
+               { cls: 'c1', values: Array.from({ length: L }, (_, i) => i < cA.length && i < lastDay ? cA[i] : null) }],
+      tips: Array.from({ length: L }, (_, i) => `تا روز ${faDigits(i + 1)}: ${monthName(repMonth)} ${i < lastDay && i < cA.length ? shortMoney(cA[i]) : '—'}، ${pm} ${i < cB.length ? shortMoney(cB[i]) : '—'}`) });
+    // ۵) ترکیب خرج بر اساس دسته + مقایسه با ماه قبل
+    const catA = C.categoryTotals(S, repMonth), catB = C.categoryTotals(S, K.prev);
+    const rows = Object.entries(catA).sort((a, b) => b[1] - a[1]);
+    const top = rows.slice(0, 5), rest = rows.slice(5).reduce((s, r) => s + r[1], 0);
+    const segs = top.map(([c, v], i) => ({ cls: 'c' + (i + 1), value: v, name: c })).concat(rest ? [{ cls: 'c6', value: rest, name: 'بقیه' }] : []);
+    const sumA = rows.reduce((s, r) => s + r[1], 0);
+    segs.forEach(sg => { sg.tip = `${sg.name}: ${money(sg.value)} (${pct(sg.value / sumA)})`; });
+    const catTable = rows.map(([c, v]) => {
+      const p = catB[c] || 0, d = p ? (v - p) / p : null;
+      return `<li><span>${esc(c)}</span><b>${shortMoney(v)}</b><em class="${d === null ? '' : d > 0 ? 'up-bad' : 'up-good'}">${d === null ? 'جدید' : (d > 0 ? '▲ ' : '▼ ') + pct(Math.abs(d))}</em></li>`;
+    }).join('');
+    // ۶) پیش‌بینی در برابر واقعی
+    const vItems = V.items;
+    const vChart = vItems.length ? barChart({ labels: vItems.map(o => o.name.slice(0, 8)), stacked: false,
+      series: [{ cls: 'c6', values: vItems.map(o => o.estimate) }, { cls: 'c1', values: vItems.map(o => o.paid ? o.amount : 0) }],
+      tips: vItems.map(o => `${o.name}: پیش‌بینی ${money(o.estimate)}${o.paid ? `، واقعی ${money(o.amount)}` : '، هنوز پرداخت نشده'}`) }) : '';
+    // ۷) سهم هر وام از بدهی
+    const debts = S.loans.map(l => ({ l, r: C.loanSummary(l).remainingAmount })).filter(x => x.r > 0).sort((a, b) => b.r - a.r);
+    const dMax = debts.length ? debts[0].r : 1, dSum = debts.reduce((s, x) => s + x.r, 0);
+
     return `
-    <header class="top"><h1>گزارش</h1></header>
+    <header class="top"><h1>گزارش و شاخص‌ها</h1></header>
     ${monthSwitch(repMonth, 'repm')}
-    <section class="block"><h2>خرج بر اساس دسته</h2>
-      ${rows.length ? `<ul class="catbars">${rows.map(([c, v]) => `<li><div><span>${esc(c)}</span><b>${money(v, false)}</b></div><i style="width:${Math.max(2, v / max * 100)}%"></i></li>`).join('')}</ul>` : `<p class="empty">خرجی برای این ماه ثبت نشده.</p>`}
-    </section>
-    <section class="block"><h2>شش ماه اخیر</h2>
-      <div class="hist">${hist.map(h => `<div class="hcol"><div class="hbars"><i class="inc" style="height:${h.inc / hmax * 100}%"></i><i class="out" style="height:${h.out / hmax * 100}%"></i></div><span>${MONTHS[+h.mm.split('/')[1] - 1]}</span></div>`).join('')}</div>
-      <p class="legend"><span class="k inc"></span>درآمد <span class="k out"></span>خرج (با اقساط پرداخت‌شده)</p>
-    </section>
-    <section class="block"><h2>خروجی اکسل</h2>
-      <p class="note">تراکنش‌ها، خلاصه‌ی ماهانه، خرج هر دسته و وضعیت وام‌ها، هر کدوم در یک شیت.</p>
+    <section class="kpis" aria-label="شاخص‌ها">${cards.join('')}</section>
+    ${figure('تعهدات ۱۲ ماه آینده', drop > 0 ? `تا ${monthName(fc.find(f => f.total === Math.min(...fc.slice(1).map(x => x.total))).ym)} ماهانه ${shortMoney(drop)} سبک‌تر می‌شی.` : 'پیش‌بینی اقساط و پرداخت‌های ماهانه از همین ماه.', fcChart, [['c1', 'اقساط'], ['c2', 'پرداخت ثابت'], ['c3', 'متغیر (پیش‌بینی)']])}
+    ${prChart ? figure('روند کاهش بدهی وام‌ها', K.debtFree ? `با پرداخت طبق برنامه، ${monthTitle(K.debtFree)} بدهی صفر می‌شه.` : '', prChart, null) : ''}
+    ${figure('خرج ماه به ماه', 'شش ماه منتهی به ' + monthTitle(repMonth), mmChart, [['c1', 'اقساط'], ['c2', 'قبض و ثابت'], ['c4', 'روزمره']].concat(hasInc ? [['c5', 'درآمد']] : []))}
+    ${figure(`خرج تجمعی: ${monthName(repMonth)} در برابر ${pm}`, 'اینکه در هر روز ماه تا اون لحظه چقدر خرج شده.', cumChart, [['c1', monthName(repMonth)], ['c6', pm]])}
+    <figure class="chart card-block"><h2>ترکیب خرج ${monthName(repMonth)}</h2>
+      ${rows.length ? `<div class="donutwrap">${donut(segs, shortMoney(sumA), 'کل خرج')}<div class="legend col">${segs.map(sg => `<span><i class="k ${sg.cls}"></i>${esc(sg.name)} <b>${pct(sg.value / sumA)}</b></span>`).join('')}</div></div>
+      <h3 class="subh">مقایسه‌ی هر دسته با ${pm}</h3><ul class="cmp">${catTable}</ul>
+      <figcaption class="tip">روی حلقه بزن تا عددها رو ببینی</figcaption>` : `<p class="empty">خرجی برای این ماه ثبت نشده.</p>`}</figure>
+    ${vChart ? figure(`پیش‌بینی در برابر واقعی، ${monthName(repMonth)}`, 'پرداخت‌های متغیر: مبلغ پیش‌بینی و مبلغی که واقعاً پرداخت شد.', vChart, [['c6', 'پیش‌بینی'], ['c1', 'واقعی']]) : ''}
+    ${debts.length ? `<section class="card-block chart"><h2>سهم هر وام از بدهی</h2><ul class="catbars">${debts.map(x => `<li><div><span>${esc(x.l.name)}</span><b>${shortMoney(x.r)} <small>${pct(x.r / dSum)}</small></b></div><i style="width:${Math.max(2, x.r / dMax * 100)}%"></i></li>`).join('')}</ul></section>` : ''}
+    <section class="block card-block"><h2>خروجی اکسل</h2>
+      <p class="note">شاخص‌ها، تراکنش‌ها، خلاصه‌ی ماهانه، خرج هر دسته، وام‌ها، پرداخت‌های ماهانه و بدهی و طلب، هر کدوم در یک شیت.</p>
       <div class="formrow"><label>از</label>${ymField('xfrom', C.addYm(cur, -2))}</div>
       <div class="formrow"><label>تا</label>${ymField('xto', cur)}</div>
       <button class="btn wide" data-act="excel">ساخت فایل اکسل</button>
     </section>
-    <section class="block"><h2>یادآورها در تقویم آیفون</h2>
-      <p class="note">یه فایل تقویم از همه‌ی اقساط و پرداخت‌های ثابت پرداخت‌نشده‌ی ۱۲ ماه آینده ساخته می‌شه، با هشدار سه روز قبل و صبح روز سررسید. بعد از اضافه کردن وام یا تعهد جدید دوباره بسازش.</p>
+    <section class="block card-block"><h2>یادآورها در تقویم آیفون</h2>
+      <p class="note">فایل تقویم همه‌ی اقساط، پرداخت‌های ماهانه و موعد بدهی‌های پرداخت‌نشده‌ی ۱۲ ماه آینده، با هشدار سه روز قبل و صبح روز سررسید.</p>
       <button class="btn wide ghost" data-act="ics">ساخت فایل یادآور</button>
     </section>`;
   }
 
   function setView() {
-    const chipsFor = type => S.categories[type].map((c, i) => `<span class="chip tag">${esc(c)}<button data-act="delcat" data-type="${type}" data-i="${i}" aria-label="حذف ${esc(c)}">✕</button></span>`).join('');
+    const chipsFor = type => S.categories[type].map((c, i) => `<span class="chip tag">${esc(c)}<button data-act="delcat" data-type="${type}" data-i="${i}" aria-label="حذف ${esc(c)}">${IC.x}</button></span>`).join('');
+    const days = S.settings.lastBackup ? Math.floor((Date.now() - S.settings.lastBackup) / 864e5) : null;
     return `
     <header class="top"><h1>تنظیمات</h1></header>
-    <section class="block"><h2>واحد نمایش</h2>
-      <div class="chips seg"><button class="chip ${S.settings.unit === 'toman' ? 'on' : ''}" data-act="unit" data-u="toman">تومان</button><button class="chip ${S.settings.unit === 'rial' ? 'on' : ''}" data-act="unit" data-u="rial">ریال</button></div>
+    <section class="block card-block"><h2>واحد نمایش</h2>
+      <div class="chips seg">${[['toman', 'تومان'], ['rial', 'ریال']].map(([k, n]) => `<button class="chip ${S.settings.unit === k ? 'on' : ''}" data-act="unit" data-u="${k}" aria-pressed="${S.settings.unit === k}">${n}</button>`).join('')}</div>
       <p class="note">داده‌ها همیشه به ریال ذخیره می‌شن؛ این فقط نمایش و ورود مبلغ رو عوض می‌کنه.</p>
     </section>
-    <section class="block"><h2>درآمد ماهانه‌ی مورد انتظار</h2>
+    <section class="block card-block"><h2>درآمد ماهانه‌ی پیش‌بینی (اختیاری)</h2>
       ${amountInput('expected', S.settings.expectedIncome)}
-      <p class="note">تا وقتی درآمد واقعی این ماه ثبت نشده، «پول آزاد» با این عدد حساب می‌شه. اگه درآمدت ثابت نیست، خالی بذار.</p>
+      <p class="note">پیش‌فرض صفره و اپ فقط اقساط و تعهدات رو حساب می‌کنه. اگه عددی بذاری، «پول آزاد این ماه» هم نشون داده می‌شه.</p>
       <button class="btn small" data-act="saveexp">ذخیره</button>
     </section>
-    <section class="block"><h2>دسته‌های خرج</h2><div class="chips wrap">${chipsFor('expense')}</div>
-      <div class="addcat"><input id="newcat-expense" placeholder="دسته‌ی جدید"><button class="btn small" data-act="addcat" data-type="expense">افزودن</button></div></section>
-    <section class="block"><h2>دسته‌های درآمد</h2><div class="chips wrap">${chipsFor('income')}</div>
-      <div class="addcat"><input id="newcat-income" placeholder="دسته‌ی جدید"><button class="btn small" data-act="addcat" data-type="income">افزودن</button></div></section>
-    ${S.accounts.length ? `<section class="block"><h2>حساب‌ها</h2><ul class="accs edit">${S.accounts.map(a => `<li><input data-accname="${a.id}" value="${esc(a.name)}" aria-label="نام حساب"><button class="btn small ghost" data-act="delacc" data-id="${a.id}">حذف</button></li>`).join('')}</ul>
+    <section class="block card-block"><h2>دسته‌های خرج</h2><div class="chips wrap">${chipsFor('expense')}</div>
+      <div class="addcat"><input id="newcat-expense" placeholder="دسته‌ی جدید" aria-label="دسته‌ی خرج جدید"><button class="btn small" data-act="addcat" data-type="expense">افزودن</button></div></section>
+    <section class="block card-block"><h2>دسته‌های درآمد</h2><div class="chips wrap">${chipsFor('income')}</div>
+      <div class="addcat"><input id="newcat-income" placeholder="دسته‌ی جدید" aria-label="دسته‌ی درآمد جدید"><button class="btn small" data-act="addcat" data-type="income">افزودن</button></div></section>
+    ${S.accounts.length ? `<section class="block card-block"><h2>حساب‌ها</h2><ul class="accs edit">${S.accounts.map(a => `<li><input data-accname="${esc(a.id)}" value="${esc(a.name)}" aria-label="نام حساب"><button class="btn small ghost" data-act="delacc" data-id="${esc(a.id)}">حذف</button></li>`).join('')}</ul>
       <button class="btn small" data-act="saveacc">ذخیره‌ی نام‌ها</button></section>` : ''}
-    <section class="block"><h2>بکاپ</h2>
-      <p class="note">${S.settings.lastBackup ? `آخرین بکاپ: ${faDigits(Math.floor((Date.now() - S.settings.lastBackup) / 864e5))} روز پیش.` : 'هنوز بکاپی گرفته نشده.'} فایل بکاپ رو در Files یا iCloud Drive نگه دار.</p>
+    <section class="block card-block"><h2>بکاپ</h2>
+      <p class="note">${days === null ? 'هنوز بکاپی گرفته نشده.' : days === 0 ? 'آخرین بکاپ: امروز.' : `آخرین بکاپ: ${faDigits(days)} روز پیش.`} فایل بکاپ رو در Files یا iCloud Drive نگه دار.</p>
       <div class="btnrow"><button class="btn" data-act="backup">گرفتن بکاپ</button><label class="btn ghost">بازگردانی از فایل<input type="file" accept=".json,application/json" id="restore" hidden></label></div>
     </section>
-    <section class="block help"><h2>راهنما</h2>${HELP}</section>
+    <section class="block card-block help"><h2>راهنما</h2>${HELP}</section>
     <section class="block"><button class="btn danger wide" data-act="wipe">پاک کردن همه‌ی داده‌ها</button></section>
-    <p class="ver">حساب‌وکتاب · نسخه‌ی ۴ · همه‌ی داده‌ها فقط روی همین گوشی</p>`;
+    <p class="ver"><b>FI</b> نسخه‌ی ${VERSION}، همه‌ی داده‌ها فقط روی همین گوشی</p>`;
   }
 
   const HELP = `
-  <details><summary>ثبت پیامک بانک با یک لمس</summary>
-    <p>در اپ Shortcuts به تب Automation برو، New Automation و بعد Message رو بزن. در Sender شماره‌ی پیامک بانک رو انتخاب کن و Run Immediately رو روشن کن. اکشن Copy to Clipboard رو اضافه کن و ورودیش رو Message (متن پیامک) بذار، بعد اکشن Show Notification با متن «پیامک بانک کپی شد». از این به بعد با رسیدن پیامک، کافیه اپ رو باز کنی و «چسباندن پیامک» رو بزنی. برای هر بانک یک اتوماسیون جدا بساز.</p></details>
-  <details><summary>ویجت دکمه‌های سریع</summary>
-    <p>در Shortcuts میان‌بُرهایی بساز که هر کدوم فقط اکشن Open URLs دارن، با آدرس اپ و یکی از این انتهاها: <code>#out</code> برای ثبت برداشت، <code>#in</code> برای ثبت واریز، <code>#paste</code> برای چسباندن پیامک (برداشت و واریز رو خودش تشخیص می‌ده) و <code>#pay</code> برای پرداخت قسط. اگه جا کمه، <code>#new</code> با یک دکمه می‌پرسه برداشت یا واریز. بعد ویجت Shortcuts رو روی صفحه‌ی اصلی بذار و این پوشه رو براش انتخاب کن. اگه لینک‌ها به جای اپ داخل Safari باز شدن، از خود آیکون اپ استفاده کن؛ صفحه‌ی اولش همین چهار دکمه رو داره.</p></details>
-  <details><summary>یادآور اقساط</summary>
-    <p>در تب گزارش، «ساخت فایل یادآور» رو بزن و گزینه‌ی افزودن به تقویم رو انتخاب کن. بهتره در اپ Calendar یه تقویم جدا به اسم «مالی» بسازی و رویدادها رو اونجا اضافه کنی؛ این‌طوری هر بار که فایل جدید می‌سازی، می‌تونی تقویم قبلی رو پاک کنی تا رویدادها تکراری نشن. ویجت Calendar آیفون هم سررسیدها رو روی صفحه‌ی اصلی نشون می‌ده.</p></details>`;
+  <details class="fold"><summary>${IC.down}ثبت از روی پیامک بانک</summary>
+    <p>متن پیامک بانک رو کپی کن، در اپ «چسباندن پیامک» رو بزن. مبلغ، نوع (برداشت یا واریز)، تاریخ و مانده خودکار پر می‌شن و فقط دسته رو انتخاب می‌کنی.</p></details>
+  <details class="fold"><summary>${IC.down}ویجت دکمه‌های سریع</summary>
+    <p>در Shortcuts میان‌بُرهایی بساز که فقط اکشن Open URLs دارن، با آدرس اپ و یکی از این انتهاها: <code>#out</code> برای ثبت برداشت، <code>#in</code> برای ثبت واریز، <code>#paste</code> برای چسباندن پیامک و <code>#pay</code> برای پرداخت قسط. <code>#new</code> با یک دکمه می‌پرسه برداشت یا واریز. اگه لینک‌ها به‌جای اپ داخل Safari باز شدن، از خود آیکون اپ استفاده کن.</p></details>
+  <details class="fold"><summary>${IC.down}پرداخت‌های متغیر</summary>
+    <p>برای قبض‌ها و صورت‌حساب‌هایی که مبلغشون هر ماه فرق می‌کنه، مبلغ پیش‌بینی گذاشته می‌شه. موقع پرداخت، مبلغ واقعی رو وارد کن؛ از اون به بعد همه‌ی جمع‌ها با مبلغ واقعی حساب می‌شن.</p></details>
+  <details class="fold"><summary>${IC.down}یادآور اقساط</summary>
+    <p>در تب گزارش، «ساخت فایل یادآور» رو بزن و افزودن به تقویم رو انتخاب کن. بهتره در اپ Calendar یه تقویم جدا به اسم «مالی» بسازی؛ هر بار فایل جدید ساختی، تقویم قبلی رو پاک کن تا رویدادها تکراری نشن.</p></details>`;
 
   // ---------- فرم تراکنش ----------
-  function catChips(type, selected) {
-    const list = S.categories[type] || [];
-    return list.map(c => `<button type="button" class="chip ${c === selected ? 'on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('');
-  }
+  const withSel = (list, sel) => sel && !list.includes(sel) ? [sel, ...list] : list;
+  const catChips = (type, selected) => withSel(S.categories[type] || [], selected).map(c => `<button type="button" class="chip ${c === selected ? 'on' : ''}" data-cat="${esc(c)}" aria-pressed="${c === selected}">${esc(c)}</button>`).join('');
   function linkOptions(current) {
-    const obs = openObligations(-3, 1);
+    const obs = C.openObligations(S, ym(today()), -3, 1);
     let opts = `<option value="">— نه، خرج روزمره است —</option>`;
-    if (current) opts += `<option value="${current.kind}|${current.id}|${current.key}" selected>${esc(obLabel(current))} (فعلی)</option>`;
-    opts += obs.map(o => `<option value="${o.kind}|${o.id}|${o.key}">${esc(o.name)} · ${o.sub} · ${money(o.amount)}</option>`).join('');
+    if (current) opts += `<option value="${esc(current.kind + '|' + current.id + '|' + current.key)}" selected>${esc(obLabel(current))} (فعلی)</option>`;
+    opts += obs.map(o => `<option value="${esc(o.kind + '|' + o.id + '|' + o.key)}">${esc(o.name)}، ${o.sub}، ${money(o.amount)}</option>`).join('');
     return opts;
   }
-  function obLabel(link) {
-    const o = findOb(link.kind, link.id); if (!o) return 'تعهد حذف‌شده';
-    return link.kind === 'loan' ? `${o.name} · قسط ${faDigits(+link.key + 1)}` : `${o.name} · ${monthTitle(link.key)}`;
-  }
+  const typeTitle = (t, type) => t ? 'ویرایش تراکنش' : type === 'income' ? 'ثبت واریز' : type === 'transfer' ? 'ثبت انتقال' : 'ثبت برداشت';
 
   function openTxForm(opts = {}) {
     const t = opts.id ? S.tx.find(x => x.id === opts.id) : null;
+    if (opts.id && !t) return;
     const p = opts.prefill || {};
     const data = t ? { ...t } : { type: opts.type || p.type || 'expense', amount: p.amount || 0, date: p.date || today(), time: p.time || '', note: p.note || '', account: p.accountId || '', cat: '' };
-    if (!t && !data.cat) data.cat = S.lastCat && S.lastCat[data.type] || '';
-    let type = data.type, cat = data.cat;
-    const dupe = p.sms && S.tx.find(x => x.amount === p.amount && x.date === p.date && x.time === p.time && x.account === p.accountId);
+    let type = data.type, cat = t ? (t.cat || '') : (S.lastCat[type] || '');
+    const dupe = p.sms && S.tx.find(x => x.amount === p.amount && x.date === p.date && (x.time || '') === (p.time || '') && x.account === p.accountId);
+    const catType = () => type === 'transfer' ? 'expense' : type;
     const html = `
-      ${p.sms ? `<p class="smsinfo">از پیامک ${esc(p.bank)}${p.balance != null ? ` · مانده ${money(p.balance)}` : ''}</p>` : ''}
-      ${dupe ? `<p class="warn">یه تراکنش با همین مبلغ و زمان قبلاً ثبت شده. احتمالاً این پیامک تکراریه.</p>` : ''}
-      <div class="chips seg" id="ttype">${[['expense', 'برداشت (خرج)'], ['income', 'واریز (درآمد)'], ['transfer', 'انتقال داخلی']].map(([k, n]) => `<button type="button" class="chip ${type === k ? 'on' : ''}" data-t="${k}">${n}</button>`).join('')}</div>
-      <p class="note tnote" ${type === 'transfer' ? '' : 'hidden'}>جابه‌جایی پول بین حساب‌های خودت؛ در درآمد و خرج حساب نمی‌شه. برای واریزی که درآمد نیست (مثلاً از حساب دیگه‌ی خودت) همین رو بزن.</p>
+      ${p.sms ? `<p class="smsinfo">از پیامک ${esc(p.bank)}${p.balance != null ? `، مانده ${money(p.balance)}` : ''}</p>` : ''}
+      ${dupe ? `<p class="alert">یه تراکنش با همین مبلغ و زمان قبلاً ثبت شده. احتمالاً این پیامک تکراریه.</p>` : ''}
+      <div class="chips seg" id="ttype" role="group" aria-label="نوع">${[['expense', 'برداشت (خرج)'], ['income', 'واریز (درآمد)'], ['transfer', 'انتقال داخلی']].map(([k, n]) => `<button type="button" class="chip ${type === k ? 'on' : ''}" data-t="${k}" aria-pressed="${type === k}">${n}</button>`).join('')}</div>
+      <p class="note tnote" ${type === 'transfer' ? '' : 'hidden'}>جابه‌جایی پول بین حساب‌های خودت؛ در درآمد و خرج حساب نمی‌شه.</p>
       <label class="lbl">مبلغ</label>${amountInput('amount', data.amount)}
       <label class="lbl">تاریخ</label>${dateField('date', data.date, true)}
-      <div id="catwrap" ${type === 'transfer' ? 'hidden' : ''}><label class="lbl">دسته</label><div class="chips wrap" id="cats">${catChips(type === 'transfer' ? 'expense' : type, cat)}</div></div>
-      <div id="linkwrap" ${type === 'expense' ? '' : 'hidden'}><label class="lbl">مربوط به قسط یا پرداخت ثابت؟</label><select id="link">${linkOptions(t && t.link)}</select></div>
-      <label class="lbl">حساب</label><select id="acc"><option value="">بدون حساب</option>${S.accounts.map(a => `<option value="${a.id}" ${a.id === data.account ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
-      <label class="lbl">توضیح</label><input id="note" value="${esc(data.note)}" placeholder="${type === 'income' ? 'مثلاً حقوق مهر' : 'مثلاً خرید هفتگی'}">
+      <div id="catwrap" ${type === 'transfer' ? 'hidden' : ''}><label class="lbl">دسته</label><div class="chips wrap" id="cats">${catChips(catType(), cat)}</div></div>
+      <div id="linkwrap" ${type === 'expense' ? '' : 'hidden'}><label class="lbl" for="link">مربوط به قسط یا پرداخت ماهانه؟</label><select id="link">${linkOptions(t && t.link)}</select></div>
+      <label class="lbl" for="acc">حساب</label><select id="acc">${accOptions(data.account)}</select>
+      <label class="lbl" for="note">توضیح</label><input id="note" value="${esc(data.note)}" placeholder="${type === 'income' ? 'مثلاً حقوق مهر' : 'مثلاً خرید هفتگی'}">
       <div class="btnrow"><button class="btn wide" id="savetx">${t ? 'ذخیره‌ی تغییرات' : 'ثبت'}</button>${t ? `<button class="btn danger" id="deltx">حذف</button>` : ''}</div>`;
-    openSheet(t ? 'ویرایش تراکنش' : type === 'income' ? 'ثبت واریز' : 'ثبت برداشت', html, ov => {
+    openSheet(typeTitle(t, type), html, ov => {
       $('#ttype', ov).addEventListener('click', e => {
         const b = e.target.closest('[data-t]'); if (!b) return;
-        type = b.dataset.t; cat = S.lastCat && S.lastCat[type] || '';
-        $$('#ttype .chip', ov).forEach(c => c.classList.toggle('on', c === b));
-        $('#cats', ov).innerHTML = catChips(type === 'transfer' ? 'expense' : type, cat);
+        type = b.dataset.t; cat = S.lastCat[type] || '';
+        $$('#ttype .chip', ov).forEach(c => { c.classList.toggle('on', c === b); c.setAttribute('aria-pressed', c === b); });
+        $('#cats', ov).innerHTML = catChips(catType(), cat);
         $('#catwrap', ov).hidden = type === 'transfer'; $('#linkwrap', ov).hidden = type !== 'expense';
         $('.tnote', ov).hidden = type !== 'transfer';
         $('#note', ov).placeholder = type === 'income' ? 'مثلاً حقوق مهر' : type === 'transfer' ? 'مثلاً از خاورمیانه به بلو' : 'مثلاً خرید هفتگی';
-        $('.sheet-head h2', ov).textContent = t ? 'ویرایش تراکنش' : type === 'income' ? 'ثبت واریز' : type === 'transfer' ? 'ثبت انتقال' : 'ثبت برداشت';
+        $('.sheet-head h2', ov).textContent = typeTitle(t, type);
       });
       $('#cats', ov).addEventListener('click', e => {
         const b = e.target.closest('[data-cat]'); if (!b) return;
-        cat = b.dataset.cat; $$('#cats .chip', ov).forEach(c => c.classList.toggle('on', c === b));
+        cat = b.dataset.cat; $$('#cats .chip', ov).forEach(c => { c.classList.toggle('on', c === b); c.setAttribute('aria-pressed', c === b); });
       });
-      if (!t && !p.amount) setTimeout(() => $('[name=amount]', ov).focus(), 250);
-      $('#savetx', ov).addEventListener('click', () => {
+      if (!t && !p.amount) setTimeout(() => { const i = $('[name=amount]', ov); if (i) i.focus(); }, 300);
+      once($('#savetx', ov), () => {
         const amount = readAmount(ov, 'amount');
-        if (!amount) { toast('مبلغ رو وارد کن.', 'bad'); return; }
+        if (!amount) { toast('مبلغ رو وارد کن.', 'bad'); return false; }
         const rec = t || { id: uid(), created: Date.now() };
         const oldLink = t && t.link ? { ...t.link } : null;
         Object.assign(rec, { type, amount, date: readDate(ov, 'date'), time: data.time || '', cat: type === 'transfer' ? '' : cat,
@@ -460,10 +724,19 @@
         const lv = type === 'expense' ? $('#link', ov).value : '';
         const newLink = lv ? (([kind, id, key]) => ({ kind, id, key }))(lv.split('|')) : null;
         const same = oldLink && newLink && oldLink.kind === newLink.kind && oldLink.id === newLink.id && oldLink.key === newLink.key;
-        if (oldLink && !same) { const o = findOb(oldLink.kind, oldLink.id); if (o && o.paid) delete o.paid[oldLink.key]; delete rec.link; }
-        if (newLink && !same) { rec.link = newLink; markPaid(newLink.kind, newLink.id, newLink.key, { date: rec.date, txId: rec.id }); }
+        if (oldLink && !same) {
+          const o = findOb(oldLink.kind, oldLink.id);
+          if (o && o.paid && o.paid[oldLink.key] && o.paid[oldLink.key].txId === rec.id) delete o.paid[oldLink.key];
+          delete rec.link; delete rec.auto;
+        }
+        if (newLink && !same) {
+          const o = findOb(newLink.kind, newLink.id);
+          const prev = o && o.paid && o.paid[newLink.key];
+          if (prev && prev.txId && prev.txId !== rec.id) { const pt = S.tx.find(x => x.id === prev.txId); if (pt) { if (pt.auto) S.tx = S.tx.filter(x => x !== pt); else delete pt.link; } }
+          rec.link = newLink; markPaid(newLink.kind, newLink.id, newLink.key, { date: rec.date, txId: rec.id });
+        }
         if (!t) S.tx.push(rec);
-        if (cat && type !== 'transfer') { S.lastCat = S.lastCat || {}; S.lastCat[type] = cat; }
+        if (cat && type !== 'transfer') S.lastCat[type] = cat;
         if (p.sms && p.balance != null && rec.account) {
           const a = S.accounts.find(x => x.id === rec.account); const stamp = rec.date + ' ' + (rec.time || '00:00');
           if (a && (!a.stamp || stamp >= a.stamp)) { a.balance = p.balance; a.stamp = stamp; }
@@ -473,89 +746,117 @@
       });
       if (t) $('#deltx', ov).addEventListener('click', () => {
         if (!confirm('این تراکنش حذف بشه؟')) return;
-        if (t.link) { const o = findOb(t.link.kind, t.link.id); if (o && o.paid) delete o.paid[t.link.key]; }
-        if (t.debt) { const d = S.debts.find(x => x.id === t.debt); if (d) { d.settles = (d.settles || []).filter(x => x.txId !== t.id); delete d.closed; } }
-        S.tx = S.tx.filter(x => x !== t); save(); closeSheet(ov); render(); toast('حذف شد.');
+        deleteTx(t); save(); closeSheet(ov); render(); toast('حذف شد.');
       });
     });
   }
+  function deleteTx(t) {
+    if (t.link) { const o = findOb(t.link.kind, t.link.id); if (o && o.paid && o.paid[t.link.key] && o.paid[t.link.key].txId === t.id) delete o.paid[t.link.key]; }
+    if (t.debt) { const d = S.debts.find(x => x.id === t.debt); if (d) { d.settles = (d.settles || []).filter(x => x.txId !== t.id); if (debtLeft(d) > 0) delete d.closed; } }
+    S.tx = S.tx.filter(x => x !== t);
+  }
 
-  // یک دکمه برای هر دو: انتخاب برداشت یا واریز
   function openChooser() {
     openSheet('ثبت تراکنش', `<nav class="quick big">
-      <button data-pick="expense"><span class="qi">−</span>برداشت</button>
-      <button data-pick="income"><span class="qi">+</span>واریز</button>
-      <button data-pick="paste" style="grid-column:1/-1"><span class="qi">⎘</span>چسباندن پیامک (خودش تشخیص می‌ده)</button></nav>`, ov => {
+      <button data-pick="expense"><span class="qi out">${IC.out}</span>برداشت</button>
+      <button data-pick="income"><span class="qi in">${IC.in}</span>واریز</button>
+      <button data-pick="paste" class="span2"><span class="qi">${IC.paste}</span>چسباندن پیامک (خودش تشخیص می‌ده)</button></nav>`, ov => {
       $('.quick', ov).addEventListener('click', e => {
         const b = e.target.closest('[data-pick]'); if (!b) return;
         closeSheet(ov);
-        b.dataset.pick === 'paste' ? openPaste() : openTxForm({ type: b.dataset.pick });
+        if (b.dataset.pick === 'paste') openPaste(); else openTxForm({ type: b.dataset.pick });
       });
     });
   }
 
-  // ---------- چسباندن پیامک ----------
   function openPaste() {
     const html = `
-      <p class="note">متن پیامک بانک رو کپی کن و «چسباندن» رو بزن. اگه اتوماسیون Shortcuts رو ساخته باشی، متن از قبل کپی شده.</p>
-      <button class="btn wide" id="clip">چسباندن از کلیپ‌بورد</button>
-      <textarea id="smstext" rows="7" placeholder="یا متن پیامک رو اینجا بچسبون"></textarea>
+      <p class="note">متن پیامک بانک رو کپی کن و «چسباندن» رو بزن. برداشت یا واریز بودن، مبلغ، تاریخ و مانده خودکار تشخیص داده می‌شه.</p>
+      <button class="btn wide" id="clip">${IC.paste}چسباندن از کلیپ‌بورد</button>
+      <textarea id="smstext" rows="7" placeholder="یا متن پیامک رو اینجا بچسبون" aria-label="متن پیامک"></textarea>
       <button class="btn wide ghost" id="parse">بررسی متن</button>`;
     openSheet('چسباندن پیامک', html, ov => {
-      const go = () => {
+      const go2 = () => {
         const r = C.parseSMS($('#smstext', ov).value);
         if (!r) { toast('متنی وارد نشده.', 'bad'); return; }
-        if (r.error) { toast(r.error + ' مبلغ رو دستی وارد کن.', 'bad'); }
+        if (r.error) toast(r.error + ' مبلغ رو دستی وارد کن.', 'bad');
         const acc = accountFor(r.bank, r.account); save();
         closeSheet(ov);
         openTxForm({ prefill: { ...r, accountId: acc.id, sms: true } });
       };
       $('#clip', ov).addEventListener('click', async () => {
-        try { const txt = await navigator.clipboard.readText(); $('#smstext', ov).value = txt; if (txt.trim()) go(); else toast('کلیپ‌بورد خالیه.', 'bad'); }
-        catch (e) { toast('دسترسی به کلیپ‌بورد داده نشد. متن رو دستی بچسبون.', 'bad'); $('#smstext', ov).focus(); }
+        try {
+          const txt = await navigator.clipboard.readText();
+          $('#smstext', ov).value = txt;
+          if (txt.trim()) go2(); else toast('کلیپ‌بورد خالیه.', 'bad');
+        } catch (e) { toast('دسترسی به کلیپ‌بورد داده نشد. متن رو دستی بچسبون.', 'bad'); $('#smstext', ov).focus(); }
       });
-      $('#parse', ov).addEventListener('click', go);
+      $('#parse', ov).addEventListener('click', go2);
     });
   }
 
-  // ---------- پرداخت قسط ----------
+  // ---------- پرداخت ----------
   function openDueList() {
-    const list = openObligations(-3, 1);
-    openSheet('پرداخت قسط یا تعهد', list.length ? `<ul class="oblist">${list.map(obRow).join('')}</ul>` : `<p class="empty">قسط یا پرداخت ثابت پرداخت‌نشده‌ای نداری.</p>`);
+    const body = () => {
+      const cur = ym(today()), list = C.openObligations(S, cur, -3, 1);
+      if (!list.length) return `<p class="empty">مورد پرداخت‌نشده‌ای نمونده.</p>`;
+      const groups = [['عقب‌افتاده', list.filter(o => ym(o.due) < cur)], [monthName(cur) + ' (این ماه)', list.filter(o => ym(o.due) === cur)],
+        [monthName(C.addYm(cur, 1)) + ' (ماه بعد)', list.filter(o => ym(o.due) > cur)]];
+      return groups.filter(g => g[1].length).map(([t, l]) => `<h3 class="grp">${t}</h3><ul class="oblist">${l.map(obRow).join('')}</ul>`).join('');
+    };
+    openSheet('پرداخت قسط یا قبض', body(), ov => { ov._refresh = () => { $('.sheet-body', ov).innerHTML = body(); }; });
+  }
+  // پرداخت یک‌لمسی برای مبلغ ثابت؛ مورد متغیر مبلغ واقعی رو می‌پرسه
+  function quickPay(kind, id, key) {
+    const o = getOb(kind, id, key); if (!o || o.paid) return;
+    if (o.variable) { openPay(kind, id, key); return; }
+    const t = { id: uid(), created: Date.now(), type: 'expense', amount: o.estimate, date: today(), time: '', cat: obDefaultCat(kind, id),
+      account: '', note: `${o.name}، ${o.sub}`, link: { kind, id, key: String(key) }, auto: true };
+    S.tx.push(t); markPaid(kind, id, key, { date: t.date, txId: t.id });
+    save(); refreshSheets(); render();
+    toast(`${o.name}: ${money(o.estimate)} پرداخت شد.`, '', { label: 'برگرداندن', fn: () => { unmarkPaid(kind, id, key); save(); refreshSheets(); render(); } });
+  }
+  // ورقه‌های باز (لیست سررسیدها، جزئیات وام) بعد از هر تغییر همون لحظه تازه می‌شن
+  function refreshSheets() { $$('.overlay:not(.closing)').forEach(ov => { if (ov._refresh) ov._refresh(); }); }
+  function askUnpay(kind, id, key) {
+    const o = getOb(kind, id, key); if (!o) return;
+    if (!confirm(`پرداخت «${o.name}» برگرده به پرداخت‌نشده؟`)) return;
+    unmarkPaid(kind, id, key); save(); refreshSheets(); render(); toast('برگردانده شد.');
   }
   function openPay(kind, id, key) {
-    const o = C.obligationsForMonth(S, kind === 'loan' ? ym(C.loanDue(findOb(kind, id), +key)) : key).find(x => x.kind === kind && x.id === id && x.key === key);
-    if (!o) return;
-    const recent = S.tx.filter(t => t.type === 'expense' && !t.link && C.diffDays(t.date, today()) <= 45)
+    const o = getOb(kind, id, key); if (!o) return;
+    if (o.paid) { askUnpay(kind, id, key); return; }
+    const recent = S.tx.filter(t => t.type === 'expense' && !t.link && Math.abs(C.diffDays(t.date, today())) <= 45)
       .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 25);
     const html = `
-      <p class="payhead"><strong>${esc(o.name)}</strong><span>${o.sub} · سررسید ${dateTitle(o.due)}</span></p>
-      <label class="check"><input type="checkbox" id="already"> قبلاً از روی پیامک ثبتش کردم</label>
+      <p class="payhead"><strong>${esc(o.name)}</strong><span>${o.sub}، سررسید ${dateFull(o.due)}</span></p>
+      ${o.variable ? `<p class="smsinfo">مبلغ پیش‌بینی: ${money(o.estimate)}. مبلغ واقعی رو وارد کن.</p>` : ''}
+      <label class="check"><input type="checkbox" id="already"> قبلاً به‌عنوان برداشت ثبتش کردم</label>
       <div id="newpay">
-        <label class="lbl">مبلغ پرداختی</label>${amountInput('amount', o.amount)}
+        <label class="lbl">${o.variable ? 'مبلغ واقعی' : 'مبلغ پرداختی'}</label>${amountInput('amount', o.estimate)}
         <label class="lbl">تاریخ پرداخت</label>${dateField('date', today(), true)}
-        <label class="lbl">از حساب</label><select id="acc"><option value="">بدون حساب</option>${S.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>
+        <label class="lbl" for="acc">از حساب</label><select id="acc">${accOptions('')}</select>
       </div>
       <div id="pickpay" hidden>
-        <label class="lbl">کدوم تراکنش؟</label>
-        <select id="pick"><option value="">فقط علامت بزن، به تراکنشی وصل نکن</option>${recent.map(t => `<option value="${t.id}">${dateTitle(t.date)} · ${money(t.amount)}${t.note ? ' · ' + esc(t.note) : ''}</option>`).join('')}</select>
+        <label class="lbl" for="pick">کدوم تراکنش؟</label>
+        <select id="pick"><option value="">فقط علامت بزن، به تراکنشی وصل نکن</option>${recent.map(t => `<option value="${esc(t.id)}">${dateTitle(t.date)}، ${money(t.amount)}${t.note ? '، ' + esc(t.note) : ''}</option>`).join('')}</select>
       </div>
-      <button class="btn wide" id="dopay">ثبت پرداخت</button>`;
+      <button class="btn wide" id="dopay">${IC.check}ثبت پرداخت</button>`;
     openSheet('ثبت پرداخت', html, ov => {
+      if (o.variable) setTimeout(() => { const i = $('[name=amount]', ov); if (i) { i.focus(); i.select(); } }, 300);
       $('#already', ov).addEventListener('change', e => { $('#newpay', ov).hidden = e.target.checked; $('#pickpay', ov).hidden = !e.target.checked; });
-      $('#dopay', ov).addEventListener('click', () => {
+      once($('#dopay', ov), () => {
         if ($('#already', ov).checked) {
-          const tid = $('#pick', ov).value;
-          const t = S.tx.find(x => x.id === tid);
-          if (t) { t.link = { kind, id, key }; markPaid(kind, id, key, { date: t.date, txId: t.id }); }
+          const tt = S.tx.find(x => x.id === $('#pick', ov).value);
+          if (tt) { tt.link = { kind, id, key: String(key) }; markPaid(kind, id, key, { date: tt.date, txId: tt.id }); }
           else markPaid(kind, id, key, { date: today() });
         } else {
-          const amount = readAmount(ov, 'amount'); if (!amount) { toast('مبلغ رو وارد کن.', 'bad'); return; }
-          const t = { id: uid(), created: Date.now(), type: 'expense', amount, date: readDate(ov, 'date'), time: '', cat: (findOb(kind, id) || {}).cat || (kind === 'loan' ? 'قسط وام' : 'پرداخت ثابت'),
-            account: $('#acc', ov).value, note: `${o.name} · ${o.sub}`, link: { kind, id, key }, auto: true };
-          S.tx.push(t); markPaid(kind, id, key, { date: t.date, txId: t.id });
+          const amount = readAmount(ov, 'amount'); if (!amount) { toast('مبلغ رو وارد کن.', 'bad'); return false; }
+          const tt = { id: uid(), created: Date.now(), type: 'expense', amount, date: readDate(ov, 'date'), time: '', cat: obDefaultCat(kind, id),
+            account: $('#acc', ov).value, note: `${o.name}، ${o.sub.replace('، پیش‌بینی', '')}`, link: { kind, id, key: String(key) }, auto: true };
+          S.tx.push(tt); markPaid(kind, id, key, { date: tt.date, txId: tt.id });
         }
-        save(); $$('.overlay').forEach(x => closeSheet(x)); render(); toast('پرداخت ثبت شد.');
+        save(); closeSheet(ov); refreshSheets(); render(); toast('پرداخت ثبت شد.');
       });
     });
   }
@@ -564,165 +865,178 @@
   function openLoanForm(id) {
     const l = id ? S.loans.find(x => x.id === id) : null;
     const html = `
-      <label class="lbl">نام وام</label><input id="lname" value="${esc(l ? l.name : '')}" placeholder="مثلاً وام خرید خودرو">
-      <label class="lbl">بانک یا وام‌دهنده</label><input id="llender" value="${esc(l ? l.lender : '')}" placeholder="اختیاری">
+      <label class="lbl" for="lname">نام وام یا خرید قسطی</label><input id="lname" value="${esc(l ? l.name : '')}" placeholder="مثلاً وام مسکن یا اسنپ پی لباس">
+      <label class="lbl" for="llender">بانک یا سرویس</label><input id="llender" value="${esc(l ? l.lender : '')}" placeholder="اختیاری">
       <label class="lbl">مبلغ هر قسط</label>${amountInput('lamount', l ? l.amount : 0)}
-      <label class="lbl">تعداد کل اقساط</label><input id="lcount" inputmode="numeric" value="${l ? faDigits(l.count) : ''}" placeholder="مثلاً ۳۶">
+      <label class="lbl" for="lcount">تعداد کل اقساط</label><input id="lcount" inputmode="numeric" value="${l ? faDigits(l.count) : ''}" placeholder="مثلاً ۱۲">
       <label class="lbl">تاریخ سررسید اولین قسط</label>${dateField('lfirst', l ? l.first : today())}
-      <p class="note">اقساط بعدی هر ماه همین روز سررسید دارن. اگه ماهی این روز رو نداشت، آخرین روز همون ماه حساب می‌شه.</p>
-      ${!l ? `<label class="lbl">چند قسط تا حالا پرداخت شده؟</label><input id="lpaid" inputmode="numeric" placeholder="۰">` : ''}
-      <div class="btnrow"><button class="btn wide" id="lsave">${l ? 'ذخیره‌ی تغییرات' : 'افزودن وام'}</button>${l ? `<button class="btn danger" id="ldel">حذف</button>` : ''}</div>`;
-    openSheet(l ? 'ویرایش وام' : 'وام جدید', html, ov => {
-      $('#lsave', ov).addEventListener('click', () => {
-        const name = $('#lname', ov).value.trim(), amount = readAmount(ov, 'lamount');
-        const count = Number(C.normDigits($('#lcount', ov).value).replace(/\D/g, ''));
-        if (!name || !amount || !count) { toast('نام، مبلغ قسط و تعداد اقساط لازمه.', 'bad'); return; }
+      <p class="note">اقساط بعدی هر ماه همین روز سررسید دارن؛ اگه ماهی این روز رو نداشت، آخرین روز همون ماه حساب می‌شه.</p>
+      <label class="lbl" for="lcat">دسته‌ی خرج</label><select id="lcat">${withSel(['وام', ...S.categories.expense.filter(c => c !== 'وام')], l && l.cat).map(c => `<option ${c === ((l && l.cat) || 'وام') ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+      ${!l ? `<label class="lbl" for="lpaid">چند قسط تا حالا پرداخت شده؟</label><input id="lpaid" inputmode="numeric" placeholder="۰">` : ''}
+      <div class="btnrow"><button class="btn wide" id="lsave">${l ? 'ذخیره‌ی تغییرات' : 'افزودن'}</button>${l ? `<button class="btn danger" id="ldel">حذف</button>` : ''}</div>`;
+    openSheet(l ? 'ویرایش وام' : 'وام یا خرید قسطی جدید', html, ov => {
+      once($('#lsave', ov), () => {
+        const name = $('#lname', ov).value.trim(), amount = readAmount(ov, 'lamount'), count = readInt($('#lcount', ov));
+        if (!name || !amount || !count || count > 600) { toast('نام، مبلغ قسط و تعداد اقساط (۱ تا ۶۰۰) لازمه.', 'bad'); return false; }
         const rec = l || { id: uid(), paid: {} };
-        Object.assign(rec, { name, lender: $('#llender', ov).value.trim(), amount, count, first: readDate(ov, 'lfirst') });
+        Object.assign(rec, { name, lender: $('#llender', ov).value.trim(), amount, count, first: readDate(ov, 'lfirst'), cat: $('#lcat', ov).value });
         if (!l) {
-          const pc = Math.min(count, Number(C.normDigits($('#lpaid', ov).value).replace(/\D/g, '')) || 0);
+          const pc = Math.min(count, readInt($('#lpaid', ov)));
           for (let i = 0; i < pc; i++) rec.paid[i] = { date: C.loanDue(rec, i), prior: true };
           S.loans.push(rec);
-        } else Object.keys(rec.paid).forEach(k => { if (+k >= count) delete rec.paid[k]; });
-        save(); $$('.overlay').forEach(x => closeSheet(x)); obTab = 'loan'; render(); toast(l ? 'ذخیره شد.' : 'وام اضافه شد.');
+        } else Object.keys(rec.paid).forEach(k => { if (+k >= count) unmarkPaid('loan', rec.id, k); });
+        save(); closeAll(); obTab = 'loan'; render(); toast(l ? 'ذخیره شد.' : 'اضافه شد.');
       });
       if (l) $('#ldel', ov).addEventListener('click', () => {
-        if (!confirm(`«${l.name}» و سابقه‌ی اقساطش حذف بشه؟ تراکنش‌هایی که ثبت کردی می‌مونن.`)) return;
-        S.tx.forEach(t => { if (t.link && t.link.id === l.id) delete t.link; });
-        S.loans = S.loans.filter(x => x !== l); save(); $$('.overlay').forEach(x => closeSheet(x)); render(); toast('حذف شد.');
+        if (!confirm(`«${l.name}» و سابقه‌ی اقساطش حذف بشه؟ تراکنش‌هایی که ثبت شدن می‌مونن.`)) return;
+        unlinkAllFor(l.id); S.loans = S.loans.filter(x => x !== l); save(); closeAll(); render(); toast('حذف شد.');
       });
     });
   }
-  function openLoanDetail(id) {
-    const l = S.loans.find(x => x.id === id); if (!l) return;
-    const s = C.loanSummary(l); const t = today();
+  function loanDetailHtml(l) {
+    const s = C.loanSummary(l), t = today();
     let rows = '';
     for (let i = 0; i < l.count; i++) {
       const due = C.loanDue(l, i), paid = l.paid && l.paid[i];
       rows += `<li class="${paid ? 'paid' : due < t ? 'late' : ''}"><button data-inst="${i}">
         <span class="n">${faDigits(i + 1)}</span><span>${dateFull(due)}</span>
-        <em>${paid ? 'پرداخت شد' : due < t ? 'عقب‌افتاده' : ''}</em></button></li>`;
+        <em>${paid ? (paid.prior ? 'پرداخت‌شده (قبلی)' : 'پرداخت شد') : due < t ? 'عقب‌افتاده' : ''}</em></button></li>`;
     }
-    const html = `
-      <div class="sums"><div><span>مانده‌ی بدهی</span><b>${money(s.remainingAmount)}</b></div><div><span>اقساط باقی‌مانده</span><b>${faDigits(s.remainingCount)}</b></div></div>
+    return `
+      <div class="sums"><div class="sum"><span>مانده‌ی بدهی</span><b>${money(s.remainingAmount)}</b></div><div class="sum"><span>اقساط باقی‌مانده</span><b>${faDigits(s.remainingCount)} از ${faDigits(l.count)}</b></div></div>
+      ${l.total ? `<p class="note">مبلغ کل: ${money(l.total)}</p>` : ''}
       <p class="note">روی هر قسط بزن تا پرداختش رو ثبت کنی یا برگردونیش.</p>
       <ul class="inst">${rows}</ul>
-      <button class="btn wide ghost" id="ledit">ویرایش وام</button>`;
-    openSheet(l.name, html, ov => {
-      $('.inst', ov).addEventListener('click', e => {
+      <button class="btn wide ghost" data-ledit>ویرایش</button>`;
+  }
+  function openLoanDetail(id) {
+    const l0 = S.loans.find(x => x.id === id); if (!l0) return;
+    openSheet(l0.name, loanDetailHtml(l0), ov => {
+      const body = $('.sheet-body', ov);
+      ov._refresh = () => { const l = S.loans.find(x => x.id === id); if (!l) { closeSheet(ov); return; } const top = ov.querySelector('.sheet').scrollTop; body.innerHTML = loanDetailHtml(l); ov.querySelector('.sheet').scrollTop = top; };
+      const nextLi = $('.inst li:not(.paid)', ov); if (nextLi) setTimeout(() => nextLi.scrollIntoView({ block: 'center' }), 60);
+      body.addEventListener('click', e => {
+        const l = S.loans.find(x => x.id === id); if (!l) return;
+        if (e.target.closest('[data-ledit]')) { openLoanForm(l.id); return; }
         const b = e.target.closest('[data-inst]'); if (!b) return;
         const i = b.dataset.inst;
         if (l.paid && l.paid[i]) {
           if (!confirm('این قسط به «پرداخت‌نشده» برگرده؟')) return;
-          unmarkPaid('loan', l.id, i); save(); closeSheet(ov); render(); openLoanDetail(l.id);
+          unmarkPaid('loan', l.id, i); save(); refreshSheets(); render();
         } else openPay('loan', l.id, i);
       });
-      $('#ledit', ov).addEventListener('click', () => openLoanForm(l.id));
     });
   }
 
-  // ---------- پرداخت ثابت ----------
+  // ---------- پرداخت ماهانه ----------
   function openFixedForm(id) {
     const f = id ? S.fixed.find(x => x.id === id) : null;
-    const cur = ym(today()), paid = f && f.paid && f.paid[cur];
+    const cur = ym(today()), activeNow = f && (!f.start || cur >= f.start) && (!f.end || cur <= f.end);
+    const paid = f && f.paid && f.paid[cur];
     const html = `
-      ${f ? `<div class="btnrow"><button class="btn ${paid ? 'ghost' : ''} wide" id="fpay">${paid ? 'برگرداندن پرداخت این ماه' : 'پرداخت این ماه ثبت شود'}</button></div>` : ''}
-      <label class="lbl">عنوان</label><input id="fname" value="${esc(f ? f.name : '')}" placeholder="مثلاً اجاره یا شارژ ساختمان">
-      <label class="lbl">مبلغ ماهانه</label>${amountInput('famount', f ? f.amount : 0)}
-      <label class="lbl">روز سررسید در ماه</label><input id="fday" inputmode="numeric" value="${f ? faDigits(f.day) : ''}" placeholder="۱ تا ۳۱">
+      ${activeNow ? `<button class="btn wide ${paid ? 'ghost' : ''}" id="fpay">${paid ? 'برگرداندن پرداخت این ماه' : `${IC.check}ثبت پرداخت ${monthName(cur)}`}</button>` : ''}
+      <label class="lbl" for="fname">عنوان</label><input id="fname" value="${esc(f ? f.name : '')}" placeholder="مثلاً ایرانسل یا اجاره">
+      <label class="check"><input type="checkbox" id="fvar" ${f && f.variable ? 'checked' : ''}> مبلغش هر ماه فرق می‌کنه (متغیر / پیش‌بینی)</label>
+      <label class="lbl" id="famtlbl">${f && f.variable ? 'مبلغ پیش‌بینی ماهانه' : 'مبلغ ماهانه'}</label>${amountInput('famount', f ? f.amount : 0)}
+      <label class="lbl" for="fday">روز سررسید در ماه</label><input id="fday" inputmode="numeric" value="${f ? faDigits(f.day) : ''}" placeholder="۱ تا ۳۱">
+      <label class="lbl" for="fcat">دسته‌ی خرج</label><select id="fcat">${withSel(['پرداخت ماهانه', ...S.categories.expense.filter(c => c !== 'پرداخت ماهانه')], f && f.cat).map(c => `<option ${c === ((f && f.cat) || 'پرداخت ماهانه') ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
       <label class="lbl">از ماه</label>${ymField('fstart', f ? f.start : cur)}
       <label class="lbl">تا ماه</label>${ymField('fend', f ? f.end : null, true)}
       <p class="note">اگه پایان مشخصی نداره، «تا ماه» رو خالی بذار.</p>
       <div class="btnrow"><button class="btn wide" id="fsave">${f ? 'ذخیره‌ی تغییرات' : 'افزودن'}</button>${f ? `<button class="btn danger" id="fdel">حذف</button>` : ''}</div>`;
-    openSheet(f ? f.name : 'پرداخت ثابت جدید', html, ov => {
-      if (f) $('#fpay', ov).addEventListener('click', () => {
-        if (paid) { unmarkPaid('fixed', f.id, cur); save(); closeSheet(ov); render(); toast('برگردانده شد.'); }
-        else { closeSheet(ov); openPay('fixed', f.id, cur); }
+    openSheet(f ? f.name : 'پرداخت ماهانه‌ی جدید', html, ov => {
+      $('#fvar', ov).addEventListener('change', e => { $('#famtlbl', ov).textContent = e.target.checked ? 'مبلغ پیش‌بینی ماهانه' : 'مبلغ ماهانه'; });
+      if (activeNow) $('#fpay', ov).addEventListener('click', () => {
+        closeSheet(ov);
+        if (paid) askUnpay('fixed', f.id, cur); else setTimeout(() => openPay('fixed', f.id, cur), 200);
       });
-      $('#fsave', ov).addEventListener('click', () => {
-        const name = $('#fname', ov).value.trim(), amount = readAmount(ov, 'famount');
-        const day = Number(C.normDigits($('#fday', ov).value).replace(/\D/g, ''));
-        if (!name || !amount || !(day >= 1 && day <= 31)) { toast('عنوان، مبلغ و روز سررسید (۱ تا ۳۱) لازمه.', 'bad'); return; }
+      once($('#fsave', ov), () => {
+        const name = $('#fname', ov).value.trim(), amount = readAmount(ov, 'famount'), day = readInt($('#fday', ov));
+        const start = readYm(ov, 'fstart'), end = readYm(ov, 'fend');
+        if (!name || !amount || !(day >= 1 && day <= 31)) { toast('عنوان، مبلغ و روز سررسید (۱ تا ۳۱) لازمه.', 'bad'); return false; }
+        if (end && end < start) { toast('«تا ماه» نمی‌تونه قبل از «از ماه» باشه.', 'bad'); return false; }
         const rec = f || { id: uid(), paid: {} };
-        Object.assign(rec, { name, amount, day, start: readYm(ov, 'fstart'), end: readYm(ov, 'fend') });
+        Object.assign(rec, { name, amount, day, start, end, variable: $('#fvar', ov).checked, cat: $('#fcat', ov).value });
         if (!f) S.fixed.push(rec);
         save(); closeSheet(ov); obTab = 'fixed'; render(); toast(f ? 'ذخیره شد.' : 'اضافه شد.');
       });
       if (f) $('#fdel', ov).addEventListener('click', () => {
-        if (!confirm(`«${f.name}» حذف بشه؟`)) return;
-        S.tx.forEach(t => { if (t.link && t.link.id === f.id) delete t.link; });
-        S.fixed = S.fixed.filter(x => x !== f); save(); closeSheet(ov); render(); toast('حذف شد.');
+        if (!confirm(`«${f.name}» حذف بشه؟ تراکنش‌هایی که ثبت شدن می‌مونن.`)) return;
+        unlinkAllFor(f.id); S.fixed = S.fixed.filter(x => x !== f); save(); closeSheet(ov); render(); toast('حذف شد.');
       });
     });
   }
 
-  // ---------- بدهی و طلب: فرم‌ها ----------
+  // ---------- بدهی و طلب ----------
   function openDebtForm(id, dir) {
     const d = id ? S.debts.find(x => x.id === id) : null;
     dir = d ? d.dir : dir || 'owe';
     const people = [...new Set(S.debts.map(x => x.person))];
     const html = `
-      <div class="chips seg" id="ddir"><button type="button" class="chip ${dir === 'owe' ? 'on' : ''}" data-d="owe">بدهکارم به</button><button type="button" class="chip ${dir === 'owed' ? 'on' : ''}" data-d="owed">طلبکارم از</button></div>
-      <label class="lbl">شخص</label><input id="dperson" list="dpeople" value="${esc(d ? d.person : '')}" placeholder="نام">
+      <div class="chips seg" id="ddir" role="group">${[['owe', 'بدهکارم به'], ['owed', 'طلبکارم از']].map(([k, n]) => `<button type="button" class="chip ${dir === k ? 'on' : ''}" data-d="${k}" aria-pressed="${dir === k}">${n}</button>`).join('')}</div>
+      <label class="lbl" for="dperson">شخص</label><input id="dperson" list="dpeople" value="${esc(d ? d.person : '')}" placeholder="نام">
       <datalist id="dpeople">${people.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
       <label class="lbl">مبلغ</label>${amountInput('damount', d ? d.amount : 0)}
       <label class="lbl">تاریخ</label>${dateField('ddate', d ? d.date : today(), true)}
       <label class="check"><input type="checkbox" id="hasdue" ${d && d.due ? 'checked' : ''}> موعد تسویه داره</label>
       <div id="duewrap" ${d && d.due ? '' : 'hidden'}><label class="lbl">موعد تسویه</label>${dateField('ddue', d && d.due ? d.due : C.addMonths(today(), 1))}</div>
-      <label class="lbl">توضیح</label><input id="dnote" value="${esc(d ? d.note : '')}" placeholder="مثلاً قرض برای تعمیر ماشین">
+      <label class="lbl" for="dnote">توضیح</label><input id="dnote" value="${esc(d ? d.note : '')}" placeholder="اختیاری">
       <div class="btnrow"><button class="btn wide" id="dsave">${d ? 'ذخیره‌ی تغییرات' : 'ثبت'}</button>${d ? `<button class="btn danger" id="ddel">حذف</button>` : ''}</div>`;
     openSheet(d ? 'ویرایش' : 'بدهی یا طلب جدید', html, ov => {
-      $('#ddir', ov).addEventListener('click', e => { const b = e.target.closest('[data-d]'); if (!b) return; dir = b.dataset.d; $$('#ddir .chip', ov).forEach(c => c.classList.toggle('on', c === b)); });
-      $('#hasdue', ov).addEventListener('change', e => $('#duewrap', ov).hidden = !e.target.checked);
-      if (!d) setTimeout(() => $('#dperson', ov).focus(), 250);
-      $('#dsave', ov).addEventListener('click', () => {
+      $('#ddir', ov).addEventListener('click', e => { const b = e.target.closest('[data-d]'); if (!b) return; dir = b.dataset.d; $$('#ddir .chip', ov).forEach(c => { c.classList.toggle('on', c === b); c.setAttribute('aria-pressed', c === b); }); });
+      $('#hasdue', ov).addEventListener('change', e => { $('#duewrap', ov).hidden = !e.target.checked; });
+      if (!d) setTimeout(() => { const i = $('#dperson', ov); if (i) i.focus(); }, 300);
+      once($('#dsave', ov), () => {
         const person = $('#dperson', ov).value.trim(), amount = readAmount(ov, 'damount');
-        if (!person || !amount) { toast('نام شخص و مبلغ لازمه.', 'bad'); return; }
+        if (!person || !amount) { toast('نام شخص و مبلغ لازمه.', 'bad'); return false; }
         const rec = d || { id: uid(), settles: [] };
         Object.assign(rec, { dir, person, amount, date: readDate(ov, 'ddate'), due: $('#hasdue', ov).checked ? readDate(ov, 'ddue') : null, note: $('#dnote', ov).value.trim() });
+        if (debtLeft(rec) > 0) delete rec.closed; else if (!rec.closed) rec.closed = today();
         if (!d) S.debts.push(rec);
-        save(); $$('.overlay').forEach(x => closeSheet(x)); obTab = 'debt'; render(); toast(d ? 'ذخیره شد.' : 'ثبت شد.');
+        save(); closeAll(); obTab = 'debt'; render(); toast(d ? 'ذخیره شد.' : 'ثبت شد.');
       });
       if (d) $('#ddel', ov).addEventListener('click', () => {
         if (!confirm(`«${debtTitle(d)}» حذف بشه؟`)) return;
-        S.debts = S.debts.filter(x => x !== d); save(); $$('.overlay').forEach(x => closeSheet(x)); render(); toast('حذف شد.');
+        S.tx.forEach(t => { if (t.debt === d.id) delete t.debt; });
+        S.debts = S.debts.filter(x => x !== d); save(); closeAll(); render(); toast('حذف شد.');
       });
     });
   }
   function openDebtDetail(id) {
     const d = S.debts.find(x => x.id === id); if (!d) return;
     const left = debtLeft(d), verb = d.dir === 'owe' ? 'پرداخت' : 'دریافت';
-    const hist = (d.settles || []).map((x, i) => `<li><span>${dateFull(x.date)}</span><b>${money(x.amount)}</b><button class="x" data-undo="${i}" aria-label="حذف این ${verb}">✕</button></li>`).join('');
+    const hist = (d.settles || []).map((x, i) => `<li><span>${dateFull(x.date)}</span><b>${money(x.amount)}</b><button class="iconbtn sm" data-undo="${i}" aria-label="حذف این ${verb}">${IC.x}</button></li>`).join('');
     const html = `
-      <div class="sums"><div><span>کل مبلغ</span><b>${money(d.amount)}</b></div><div><span>باقی‌مانده</span><b class="${left > 0 ? (d.dir === 'owe' ? 'neg' : 'pos') : ''}">${money(Math.max(left, 0))}</b></div></div>
-      <p class="note">از ${dateFull(d.date)}${d.due ? ` · موعد ${dateFull(d.due)}` : ''}${d.note ? ` · ${esc(d.note)}` : ''}</p>
+      <div class="sums"><div class="sum"><span>کل مبلغ</span><b>${money(d.amount)}</b></div><div class="sum"><span>باقی‌مانده</span><b class="${left > 0 ? (d.dir === 'owe' ? 'neg' : 'pos') : ''}">${money(Math.max(left, 0))}</b></div></div>
+      <p class="note">از ${dateFull(d.date)}${d.due ? `، موعد ${dateFull(d.due)}` : ''}${d.note ? `، ${esc(d.note)}` : ''}</p>
       ${left > 0 ? `
         <label class="lbl">مبلغ ${verb}</label>${amountInput('samount', left)}
         <p class="note">برای تسویه‌ی بخشی از مبلغ، عدد رو کمتر کن.</p>
         <label class="lbl">تاریخ</label>${dateField('sdate', today(), true)}
-        <label class="lbl">${d.dir === 'owe' ? 'از حساب' : 'به حساب'}</label><select id="sacc"><option value="">بدون حساب</option>${S.accounts.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>
-        <label class="check"><input type="checkbox" id="stx" checked> در تراکنش‌ها هم ثبت بشه</label>
+        <label class="lbl" for="sacc">${d.dir === 'owe' ? 'از حساب' : 'به حساب'}</label><select id="sacc">${accOptions('')}</select>
+        <label class="check"><input type="checkbox" id="stx" checked> در تراکنش‌ها هم ثبت بشه (به‌عنوان انتقال)</label>
         <button class="btn wide" id="settle">ثبت ${verb}</button>` : ''}
       ${hist ? `<h3 class="subh">سابقه‌ی ${verb}‌ها</h3><ul class="settles">${hist}</ul>` : ''}
       <button class="btn wide ghost" id="dedit">ویرایش</button>`;
     openSheet(debtTitle(d), html, ov => {
-      if (left > 0) $('#settle', ov).addEventListener('click', () => {
-        const amount = Math.min(readAmount(ov, 'samount'), left); if (!amount) { toast('مبلغ رو وارد کن.', 'bad'); return; }
+      if (left > 0) once($('#settle', ov), () => {
+        const amount = Math.min(readAmount(ov, 'samount'), left); if (!amount) { toast('مبلغ رو وارد کن.', 'bad'); return false; }
         const date = readDate(ov, 'sdate'), rec = { amount, date };
         if ($('#stx', ov).checked) {
           const t = { id: uid(), created: Date.now(), type: 'transfer', amount, date, time: '', cat: '', account: $('#sacc', ov).value,
             note: `${d.dir === 'owe' ? 'پرداخت بدهی به' : 'دریافت طلب از'} ${d.person}`, debt: d.id };
           S.tx.push(t); rec.txId = t.id;
         }
-        d.settles = d.settles || []; d.settles.push(rec);
+        d.settles.push(rec);
         if (debtLeft(d) <= 0) d.closed = date;
-        save(); $$('.overlay').forEach(x => closeSheet(x)); render(); toast(debtLeft(d) <= 0 ? 'تسویه شد.' : `${verb} ثبت شد.`);
+        save(); closeAll(); render(); toast(debtLeft(d) <= 0 ? 'تسویه شد.' : `${verb} ثبت شد.`);
       });
       $$('[data-undo]', ov).forEach(b => b.addEventListener('click', () => {
         if (!confirm(`این ${verb} حذف بشه؟`)) return;
         const [x] = d.settles.splice(+b.dataset.undo, 1);
         if (x && x.txId) S.tx = S.tx.filter(t => t.id !== x.txId);
-        delete d.closed; save(); closeSheet(ov); render(); openDebtDetail(d.id);
+        if (debtLeft(d) > 0) delete d.closed;
+        save(); closeSheet(ov); render(); setTimeout(() => openDebtDetail(d.id), 280);
       }));
       $('#dedit', ov).addEventListener('click', () => openDebtForm(d.id));
     });
@@ -733,76 +1047,85 @@
     const file = new File([blob], name, { type });
     try {
       if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); return true; }
-    } catch (e) { if (e.name === 'AbortError') return false; }
+    } catch (e) { if (e && e.name === 'AbortError') return false; }
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
     document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
     return true;
   }
-  const typeFa = { expense: 'خرج', income: 'درآمد', transfer: 'انتقال داخلی' };
+  const typeFa = { expense: 'برداشت (خرج)', income: 'واریز (درآمد)', transfer: 'انتقال داخلی' };
 
   function exportExcel() {
-    if (!window.XLSX) { toast('کتابخانه‌ی اکسل بارگذاری نشده. یک بار با اینترنت اپ رو باز کن.', 'bad'); return; }
+    if (!window.XLSX) { toast('کتابخانه‌ی اکسل هنوز بارگذاری نشده. چند ثانیه بعد دوباره بزن.', 'bad'); return; }
     const root = $('#view'); let from = readYm(root, 'xfrom'), to = readYm(root, 'xto');
     if (from > to) [from, to] = [to, from];
-    const months = []; for (let m = from; m <= to; m = C.addYm(m, 1)) months.push(m);
+    const months = []; for (let m = from; m <= to && months.length < 240; m = C.addYm(m, 1)) months.push(m);
     const inRange = t => ym(t.date) >= from && ym(t.date) <= to;
     const txs = S.tx.filter(inRange).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
     const X = window.XLSX, wb = X.utils.book_new();
     const add = (rows, name, widths) => { const ws = X.utils.aoa_to_sheet(rows); ws['!cols'] = widths.map(w => ({ wch: w })); X.utils.book_append_sheet(wb, ws, name); };
+    const r4 = x => x === null || !isFinite(x) ? '' : Math.round(x * 10000) / 10000;
+    add([['ماه', 'کل خرج (ریال)', 'اقساط', 'قبض و ثابت', 'روزمره', 'درآمد', 'بار اقساط', 'پیشرفت تعهدات', 'پرداخت به‌موقع (۶ ماه)', 'سهم اقساط از خرج', 'نسبت بدهی به درآمد', 'نرخ پس‌انداز', 'متغیرها: واقعی به پیش‌بینی']]
+      .concat(months.map(m => { const k = C.kpis(S, m, today());
+        return [monthTitle(m), k.outflow, k.outParts.loans, k.outParts.bills, k.outParts.daily, k.income, k.loanLoad, r4(k.progress), r4(k.onTime.rate), r4(k.loanShare), r4(k.dti), r4(k.savingsRate), r4(k.variance.est ? k.variance.actual / k.variance.est : null)]; })),
+      'شاخص‌ها', [14, 16, 14, 14, 14, 14, 14, 14, 18, 16, 18, 12, 18]);
     add([['تاریخ', 'ساعت', 'نوع', 'دسته', 'مبلغ (ریال)', 'مبلغ (تومان)', 'حساب', 'توضیح', 'مربوط به']]
       .concat(txs.map(t => [t.date, t.time || '', typeFa[t.type], t.cat || '', t.amount, t.amount / 10, accName(t.account), t.note || '', t.link ? obLabel(t.link) : ''])),
-      'تراکنش‌ها', [12, 7, 12, 16, 16, 14, 22, 32, 26]);
-    add([['ماه', 'درآمد (ریال)', 'اقساط و تعهدات پرداخت‌شده', 'خرج روزمره', 'کل خرج', 'مانده']]
-      .concat(months.map(m => { const s = C.monthStats(S, m); return [monthTitle(m), s.income, s.obPaid, s.variable, s.obPaid + s.variable, s.income - s.obPaid - s.variable]; })),
-      'خلاصه ماهانه', [16, 16, 24, 16, 16, 16]);
-    const cats = [...new Set(txs.filter(t => t.type === 'expense').map(t => t.link ? 'اقساط و تعهدات' : (t.cat || 'سایر')))];
+      'تراکنش‌ها', [12, 7, 14, 16, 16, 14, 22, 32, 26]);
+    add([['ماه', 'درآمد (ریال)', 'کل تعهدات', 'تعهدات پرداخت‌شده', 'تعهدات مانده', 'خرج روزمره', 'کل خرج']]
+      .concat(months.map(m => { const s = C.monthStats(S, m); return [monthTitle(m), s.income, s.obTotal, s.obPaid, s.obRemaining, s.variable, s.obPaid + s.variable]; })),
+      'خلاصه ماهانه', [16, 16, 16, 18, 16, 16, 16]);
+    const catOf = t => t.link ? 'اقساط و تعهدات' : (t.cat || 'سایر');
+    const exp = txs.filter(t => t.type === 'expense');
+    const cats = [...new Set(exp.map(catOf))];
     add([['دسته'].concat(months.map(monthTitle), ['جمع'])].concat(cats.map(c => {
-      const vals = months.map(m => txs.filter(t => t.type === 'expense' && ym(t.date) === m && (t.link ? 'اقساط و تعهدات' : (t.cat || 'سایر')) === c).reduce((s, t) => s + t.amount, 0));
+      const vals = months.map(m => exp.filter(t => ym(t.date) === m && catOf(t) === c).reduce((s, t) => s + t.amount, 0));
       return [c].concat(vals, [vals.reduce((a, b) => a + b, 0)]);
     })), 'خرج هر دسته', [18].concat(months.map(() => 14), [16]));
-    add([['وام', 'وام‌دهنده', 'مبلغ قسط (ریال)', 'تعداد کل', 'پرداخت‌شده', 'باقی‌مانده', 'مانده‌ی بدهی (ریال)', 'اولین قسط', 'آخرین قسط', 'قسط بعدی']]
+    add([['نام', 'بانک/سرویس', 'مبلغ قسط (ریال)', 'تعداد کل', 'پرداخت‌شده', 'باقی‌مانده', 'مانده‌ی بدهی (ریال)', 'اولین قسط', 'آخرین قسط', 'قسط بعدی']]
       .concat(S.loans.map(l => { const s = C.loanSummary(l); return [l.name, l.lender || '', l.amount, l.count, s.paidCount, s.remainingCount, s.remainingAmount, l.first, s.last, s.next ? s.next.due : 'تسویه']; })),
       'وام‌ها', [22, 16, 16, 9, 10, 10, 18, 12, 12, 12]);
-    add([['عنوان', 'مبلغ ماهانه (ریال)', 'روز سررسید', 'از ماه', 'تا ماه']].concat(S.fixed.map(f => [f.name, f.amount, f.day, f.start || '', f.end || ''])),
-      'پرداخت‌های ثابت', [22, 18, 11, 10, 10]);
+    add([['عنوان', 'نوع', 'مبلغ ماهانه/پیش‌بینی (ریال)', 'روز سررسید', 'از ماه', 'تا ماه']].concat(S.fixed.map(f => [f.name, f.variable ? 'متغیر' : 'ثابت', f.amount, f.day, f.start || '', f.end || ''])),
+      'پرداخت‌های ماهانه', [26, 8, 22, 11, 10, 10]);
     add([['نوع', 'شخص', 'مبلغ (ریال)', 'تسویه‌شده', 'باقی‌مانده', 'تاریخ', 'موعد', 'توضیح']]
       .concat(S.debts.map(d => [d.dir === 'owe' ? 'بدهکارم به' : 'طلبکارم از', d.person, d.amount, d.amount - Math.max(debtLeft(d), 0), Math.max(debtLeft(d), 0), d.date, d.due || '', d.note || ''])),
       'بدهی و طلب', [12, 18, 16, 16, 16, 12, 12, 30]);
     wb.Workbook = { Views: [{ RTL: true }] };
     const buf = X.write(wb, { bookType: 'xlsx', type: 'array' });
-    const name = `hesab-${from.replace('/', '-')}_${to.replace('/', '-')}.xlsx`;
-    shareFile(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    shareFile(new Blob([buf], { type: mime }), `fi-${from.replace('/', '-')}_${to.replace('/', '-')}.xlsx`, mime);
   }
 
   function exportICS() {
-    const t = today(), cur = ym(t); let obs = [];
-    for (let i = 0; i <= 12; i++) obs = obs.concat(C.obligationsForMonth(S, C.addYm(cur, i)));
+    const t = today(), cur = ym(t), map = C.txAmountMap(S);
+    let obs = [];
+    for (let i = 0; i <= 12; i++) obs = obs.concat(C.obligationsForMonth(S, C.addYm(cur, i), map));
     obs = obs.filter(o => !o.paid && o.due >= t);
     openDebts().filter(d => d.due && d.due >= t).forEach(d => obs.push({ kind: 'debt', id: d.id, key: 'd', due: d.due,
-      name: debtTitle(d), sub: d.dir === 'owe' ? 'موعد پرداخت بدهی' : 'موعد دریافت طلب', amount: debtLeft(d) }));
+      name: debtTitle(d), sub: d.dir === 'owe' ? 'موعد پرداخت بدهی' : 'موعد دریافت طلب', amount: debtLeft(d), variable: false }));
     if (!obs.length) { toast('سررسید یا موعد بازی در ۱۲ ماه آینده نیست.', 'bad'); return; }
+    const icsText = s => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
     const fold = line => { const out = []; let s = line; while (s.length > 36) { out.push(s.slice(0, 36)); s = ' ' + s.slice(36); } out.push(s); return out.join('\r\n'); };
     const gd = js => { const g = C.toG(js); return `${g.gy}${C.pad(g.gm)}${C.pad(g.gd)}`; };
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
-    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//hesab//fa', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:مالی'];
+    const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//fi//fa', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:مالی'];
     obs.forEach(o => {
-      const next = C.addDays(o.due, 1);
-      lines.push('BEGIN:VEVENT', `UID:${o.kind}-${o.id}-${o.key.replace('/', '')}@hesab`, `DTSTAMP:${stamp}`,
-        `DTSTART;VALUE=DATE:${gd(o.due)}`, `DTEND;VALUE=DATE:${gd(next)}`,
-        fold(`SUMMARY:${o.kind === 'loan' ? 'قسط ' : ''}${o.name} - ${money(o.amount)}`),
-        fold(`DESCRIPTION:${o.sub} - سررسید ${dateFull(o.due)}`),
+      const amt = (o.variable ? 'حدود ' : '') + money(o.amount);
+      lines.push('BEGIN:VEVENT', `UID:${o.kind}-${o.id}-${String(o.key).replace('/', '')}@hesab`, `DTSTAMP:${stamp}`,
+        `DTSTART;VALUE=DATE:${gd(o.due)}`, `DTEND;VALUE=DATE:${gd(C.addDays(o.due, 1))}`,
+        fold(`SUMMARY:${icsText(`${o.kind === 'loan' ? 'قسط ' : ''}${o.name} - ${amt}`)}`),
+        fold(`DESCRIPTION:${icsText(`${o.sub} - سررسید ${dateFull(o.due)}`)}`),
         'TRANSP:TRANSPARENT',
-        'BEGIN:VALARM', 'ACTION:DISPLAY', fold(`DESCRIPTION:سه روز دیگه: ${o.name}`), 'TRIGGER:-P2DT15H', 'END:VALARM',
-        'BEGIN:VALARM', 'ACTION:DISPLAY', fold(`DESCRIPTION:امروز سررسید ${o.name}`), 'TRIGGER:PT9H', 'END:VALARM',
+        'BEGIN:VALARM', 'ACTION:DISPLAY', fold(`DESCRIPTION:${icsText('سه روز دیگه: ' + o.name)}`), 'TRIGGER:-P2DT15H', 'END:VALARM',
+        'BEGIN:VALARM', 'ACTION:DISPLAY', fold(`DESCRIPTION:${icsText('امروز سررسید ' + o.name)}`), 'TRIGGER:PT9H', 'END:VALARM',
         'END:VEVENT');
     });
     lines.push('END:VCALENDAR');
-    shareFile(new Blob([lines.join('\r\n')], { type: 'text/calendar' }), 'yadavar-aghsat.ics', 'text/calendar');
+    shareFile(new Blob([lines.join('\r\n')], { type: 'text/calendar' }), 'fi-yadavar.ics', 'text/calendar');
   }
 
   async function backup() {
     const blob = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' });
-    const ok = await shareFile(blob, `hesab-backup-${today().replace(/\//g, '-')}.json`, 'application/json');
+    const ok = await shareFile(blob, `fi-backup-${today().replace(/\//g, '-')}.json`, 'application/json');
     if (ok) { S.settings.lastBackup = Date.now(); save(); render(); toast('فایل بکاپ ساخته شد.'); }
   }
   function restore(file) {
@@ -810,9 +1133,10 @@
     r.onload = () => {
       try {
         const d = JSON.parse(r.result);
-        if (!d || !Array.isArray(d.tx) || !Array.isArray(d.loans)) throw 0;
-        if (!confirm(`بکاپ شامل ${faDigits(d.tx.length)} تراکنش و ${faDigits(d.loans.length)} وامه. جایگزین داده‌های فعلی بشه؟`)) return;
-        S = Object.assign(defaults(), d); save(); render(); toast('داده‌ها بازگردانی شد.');
+        if (!d || typeof d !== 'object' || !Array.isArray(d.tx) || !Array.isArray(d.loans)) throw new Error('bad');
+        const n = [`${faDigits(d.tx.length)} تراکنش`, `${faDigits(d.loans.length)} وام`, `${faDigits((d.fixed || []).length)} پرداخت ماهانه`];
+        if (!confirm(`بکاپ شامل ${n.join('، ')} است. جایگزین همه‌ی داده‌های فعلی بشه؟`)) return;
+        S = normalize(d); save(); lastHero = null; go('home'); toast('داده‌ها بازگردانی شد.');
       } catch (e) { toast('این فایل بکاپ معتبر نیست.', 'bad'); }
     };
     r.readAsText(file);
@@ -820,48 +1144,55 @@
 
   // ---------- رویدادها ----------
   document.addEventListener('click', e => {
-    const tb = e.target.closest('.tabbar button'); if (tb) { tab = tb.dataset.tab; render(); return; }
+    const tb = e.target.closest('.tabbar button'); if (tb) { go(tb.dataset.tab); return; }
+    const tipEl = e.target.closest('[data-tip]');
+    if (tipEl) {
+      const fig = tipEl.closest('.chart'); if (!fig) return;
+      $$('.sel', fig).forEach(x => x.classList.remove('sel')); tipEl.classList.add('sel');
+      const cap = $('.tip', fig); if (cap) { cap.textContent = tipEl.dataset.tip; cap.classList.add('on'); }
+      return;
+    }
     const b = e.target.closest('[data-act]'); if (!b) return;
-    const a = b.dataset.act;
+    const a = b.dataset.act, k = b.dataset.k, id = b.dataset.id, key = b.dataset.key;
     const acts = {
-      add: () => openTxForm({ type: b.dataset.type }), paste: openPaste, duelist: openDueList,
-      pay: () => openPay(b.dataset.k, b.dataset.id, b.dataset.key),
-      edit: () => openTxForm({ id: b.dataset.id }),
-      goset: () => { tab = 'set'; render(); }, goob: () => { tab = 'ob'; render(); },
+      add: () => openTxForm({ type: b.dataset.type }), paste: openPaste, duelist: openDueList, chooser: openChooser,
+      pay: () => openPay(k, id, key), quickpay: () => quickPay(k, id, key), unpay: () => askUnpay(k, id, key),
+      edit: () => openTxForm({ id }),
+      goob: () => go('ob'), goloan: () => { obTab = 'loan'; go('ob'); }, godebt: () => { obTab = 'debt'; go('ob'); },
       txm: () => { txMonth = C.addYm(txMonth, +b.dataset.d); render(); },
       repm: () => { repMonth = C.addYm(repMonth, +b.dataset.d); render(); },
       txf: () => { txFilter = b.dataset.f; render(); }, obt: () => { obTab = b.dataset.t; render(); },
       newloan: () => openLoanForm(), newfixed: () => openFixedForm(),
-      newdebt: () => openDebtForm(null, b.dataset.dir), debt: () => openDebtDetail(b.dataset.id), debtd: () => openDebtDetail(b.dataset.id),
-      godebt: () => { tab = 'ob'; obTab = 'debt'; render(); },
-      loan: () => openLoanDetail(b.dataset.id), fixed: () => openFixedForm(b.dataset.id),
+      loan: () => openLoanDetail(id), fixed: () => openFixedForm(id),
+      newdebt: () => openDebtForm(null, b.dataset.dir), debtd: () => openDebtDetail(id),
       excel: exportExcel, ics: exportICS, backup,
-      unit: () => { S.settings.unit = b.dataset.u; save(); render(); },
+      unit: () => { S.settings.unit = b.dataset.u; save(); lastHero = null; render(); },
       saveexp: () => { S.settings.expectedIncome = readAmount($('#view'), 'expected'); save(); toast('ذخیره شد.'); },
-      addcat: () => { const inp = $('#newcat-' + b.dataset.type); const v = inp.value.trim(); if (!v) return;
+      addcat: () => { const inp = $('#newcat-' + b.dataset.type); const v = inp.value.trim().slice(0, 40); if (!v) return;
         if (!S.categories[b.dataset.type].includes(v)) S.categories[b.dataset.type].push(v); save(); render(); },
       delcat: () => { S.categories[b.dataset.type].splice(+b.dataset.i, 1); save(); render(); },
       saveacc: () => { $$('[data-accname]').forEach(i => { const ac = S.accounts.find(x => x.id === i.dataset.accname); if (ac && i.value.trim()) ac.name = i.value.trim(); }); save(); toast('ذخیره شد.'); },
       delacc: () => { if (!confirm('این حساب حذف بشه؟ تراکنش‌هاش می‌مونن ولی بدون حساب.')) return;
-        S.tx.forEach(t => { if (t.account === b.dataset.id) t.account = ''; }); S.accounts = S.accounts.filter(x => x.id !== b.dataset.id); save(); render(); },
+        S.tx.forEach(t => { if (t.account === id) t.account = ''; }); S.accounts = S.accounts.filter(x => x.id !== id); save(); render(); },
       wipe: () => { if (prompt('برای پاک کردن همه‌چیز، کلمه‌ی «پاک» رو بنویس. این کار برگشت‌پذیر نیست.') !== 'پاک') return;
-        S = defaults(); save(); render(); toast('همه‌ی داده‌ها پاک شد.'); }
+        S = defaults(); save(); lastHero = null; render(); toast('همه‌ی داده‌ها پاک شد.'); }
     };
     if (acts[a]) acts[a]();
   });
-  document.addEventListener('change', e => { if (e.target.id === 'restore' && e.target.files[0]) restore(e.target.files[0]); });
+  document.addEventListener('change', e => { if (e.target.id === 'restore' && e.target.files[0]) { restore(e.target.files[0]); e.target.value = ''; } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('.overlay')) closeSheet(); });
 
   // لینک‌های مستقیم برای ویجت Shortcuts
   function route() {
     const raw = location.hash.replace('#', '');
     if (!raw) return;
+    history.replaceState(null, '', location.pathname + location.search);
     const [h, qs] = raw.split('?');
     const q = new URLSearchParams(qs || '');
-    const a = Number(C.normDigits(q.get('a') || '').replace(/\D/g, ''));
-    const pre = a ? { amount: toRial(a), note: q.get('n') || '' } : { note: q.get('n') || '' };
-    history.replaceState(null, '', location.pathname + location.search);
-    $$('.overlay').forEach(x => x.remove());
-    tab = 'home'; render();
+    const a = Number(C.normDigits(q.get('a') || '').replace(/\D/g, '').slice(0, 15));
+    const pre = { note: (q.get('n') || '').slice(0, 200) }; if (a) pre.amount = Math.round(toRial(a));
+    $$('.overlay').forEach(x => x.remove()); document.body.classList.remove('locked');
+    go('home');
     if (h === 'add' || h === 'out') openTxForm({ type: 'expense', prefill: pre });
     else if (h === 'income' || h === 'in') openTxForm({ type: 'income', prefill: pre });
     else if (h === 'new') openChooser();
@@ -869,10 +1200,12 @@
     else if (h === 'pay') openDueList();
   }
   window.addEventListener('hashchange', route);
+  // بعد از برگشتن به اپ (مثلاً روز بعد) تاریخ «امروز» تازه بشه
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('.overlay')) render(); });
 
   // ---------- شروع ----------
   load(); render(); route();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  window.__hesab = { get state() { return S; } }; // برای تست
 })();

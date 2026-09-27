@@ -1,12 +1,12 @@
 {
-  "name": "حساب‌وکتاب",
-  "short_name": "حساب‌وکتاب",
+  "name": "FI",
+  "short_name": "FI",
   "lang": "fa",
   "dir": "rtl",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#E7ECEA",
+  "background_color": "#EEF1EF",
   "theme_color": "#0B5C59",
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
