@@ -4,7 +4,7 @@
   const C = window.Core;
   const { faNum, faDigits, today, ym, MONTHS } = C;
   const KEY = 'hesab-v1'; // نام قدیمی عمداً حفظ شده تا داده‌های قبلی از دست نرن
-  const VERSION = '۶';
+  const VERSION = '۷';
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -621,9 +621,11 @@
       <div class="formrow"><label>تا</label>${ymField('xto', cur)}</div>
       <button class="btn wide" data-act="excel">ساخت فایل اکسل</button>
     </section>
-    <section class="block card-block"><h2>یادآورها در تقویم آیفون</h2>
-      <p class="note">فایل تقویم همه‌ی اقساط، پرداخت‌های ماهانه و موعد بدهی‌های پرداخت‌نشده‌ی ۱۲ ماه آینده، با هشدار سه روز قبل و صبح روز سررسید.</p>
-      <button class="btn wide ghost" data-act="ics">ساخت فایل یادآور</button>
+    <section class="block card-block" id="calsec"><h2>یادآورها در تقویم آیفون</h2>
+      <p class="note">همه‌ی اقساط، پرداخت‌های ماهانه و موعد بدهی‌های پرداخت‌نشده‌ی ۱۲ ماه آینده، با یک لمس به تقویم «مالی» اضافه می‌شن. یادآورهای قبلی هم خودکار پاک و جایگزین می‌شن.</p>
+      <button class="btn wide" data-act="cal">${IC.cal}افزودن به تقویم</button>
+      ${SHORTCUT_GUIDE}
+      <button class="btn wide ghost small-top" data-act="ics">فایل تقویم (روش جایگزین)</button>
     </section>`;
   }
 
@@ -656,6 +658,37 @@
     <p class="ver"><b>FI</b> نسخه‌ی ${VERSION}، همه‌ی داده‌ها فقط روی همین گوشی</p>`;
   }
 
+  const SHORTCUT_GUIDE = `<details class="fold guide" data-fold="scguide"><summary>${IC.down}راه‌اندازی یک‌باره (حدود ۵ دقیقه)</summary>
+    <ol class="steps">
+      <li>در اپ <bdi class="en">Calendar</bdi>، پایین صفحه <bdi class="en">Calendars</bdi> و بعد <bdi class="en">Add Calendar</bdi> رو بزن و یه تقویم به اسم <b>مالی</b> بساز.</li>
+      <li>اپ <bdi class="en">Shortcuts</bdi> رو باز کن، <bdi class="en">+</bdi> رو بزن و اسم میان‌بُر رو دقیقاً <bdi class="en">FI Calendar</bdi> بذار.</li>
+      <li>این اکشن‌ها رو به ترتیب اضافه کن (با جست‌وجوی اسمشون):
+        <ol>
+          <li><bdi class="en">Get Clipboard</bdi></li>
+          <li><bdi class="en">Get Dictionary from Input</bdi></li>
+          <li><bdi class="en">Get Dictionary Value</bdi>
+            <ul><li>کلید (<bdi class="en">Key</bdi>) رو بنویس <bdi class="en">events</bdi></li></ul></li>
+          <li><bdi class="en">Find Calendar Events</bdi>
+            <ul><li>فیلتر اول: <bdi class="en">Calendar is</bdi> مالی</li><li>فیلتر دوم: <bdi class="en">Start Date is in the next 2 years</bdi></li></ul></li>
+          <li><bdi class="en">Remove Events</bdi>
+            <ul><li>گزینه‌ی <bdi class="en">Confirm Before Deleting</bdi> رو خاموش کن</li></ul></li>
+          <li><bdi class="en">Repeat with Each</bdi>، ورودیش رو خروجی مرحله‌ی ۳ (<bdi class="en">Dictionary Value</bdi>) بذار. داخل حلقه:
+            <ul>
+              <li><bdi class="en">Get Dictionary Value</bdi> از <bdi class="en">Repeat Item</bdi>، کلید <bdi class="en">title</bdi></li>
+              <li><bdi class="en">Get Dictionary Value</bdi> از <bdi class="en">Repeat Item</bdi>، کلید <bdi class="en">start</bdi></li>
+              <li><bdi class="en">Get Dictionary Value</bdi> از <bdi class="en">Repeat Item</bdi>، کلید <bdi class="en">end</bdi></li>
+              <li><bdi class="en">Add New Event</bdi> با این تنظیمات:
+                <ul><li>عنوان: مقدار <bdi class="en">title</bdi></li><li>تقویم (<bdi class="en">Calendar</bdi>): مالی</li>
+                <li>شروع (<bdi class="en">Start Date</bdi>): مقدار <bdi class="en">start</bdi></li><li>پایان (<bdi class="en">End Date</bdi>): مقدار <bdi class="en">end</bdi></li>
+                <li>هشدار (<bdi class="en">Alert</bdi>) رو بذار روی <bdi class="en">1 day before</bdi></li></ul></li>
+            </ul></li>
+          <li>بعد از <bdi class="en">End Repeat</bdi>، اکشن <bdi class="en">Show Notification</bdi> با متن «یادآورها به‌روز شد»</li>
+        </ol></li>
+      <li>بار اول که اجرا بشه، آیفون برای دسترسی به کلیپ‌بورد و تقویم اجازه می‌خواد؛ <bdi class="en">Always Allow</bdi> رو بزن.</li>
+    </ol>
+    <p class="note">از این به بعد هر وقت قسطی پرداخت کردی یا وام جدیدی اضافه کردی، «افزودن به تقویم» رو دوباره بزن تا تقویم به‌روز بشه.</p>
+  </details>`;
+
   const HELP = `
   <details class="fold"><summary>${IC.down}ثبت از روی پیامک بانک</summary>
     <p>متن پیامک بانک رو کپی کن، در اپ «چسباندن پیامک» رو بزن. مبلغ، نوع (برداشت یا واریز)، تاریخ و مانده خودکار پر می‌شن و فقط دسته رو انتخاب می‌کنی.</p></details>
@@ -663,8 +696,8 @@
     <p>در Shortcuts میان‌بُرهایی بساز که فقط اکشن Open URLs دارن، با آدرس اپ و یکی از این انتهاها: <code>#out</code> برای ثبت برداشت، <code>#in</code> برای ثبت واریز، <code>#paste</code> برای چسباندن پیامک و <code>#pay</code> برای پرداخت قسط. <code>#new</code> با یک دکمه می‌پرسه برداشت یا واریز. اگه لینک‌ها به‌جای اپ داخل Safari باز شدن، از خود آیکون اپ استفاده کن.</p></details>
   <details class="fold"><summary>${IC.down}پرداخت‌های متغیر</summary>
     <p>برای قبض‌ها و صورت‌حساب‌هایی که مبلغشون هر ماه فرق می‌کنه، مبلغ پیش‌بینی گذاشته می‌شه. موقع پرداخت، مبلغ واقعی رو وارد کن؛ از اون به بعد همه‌ی جمع‌ها با مبلغ واقعی حساب می‌شن.</p></details>
-  <details class="fold"><summary>${IC.down}یادآور اقساط</summary>
-    <p>در تب گزارش، «ساخت فایل یادآور» رو بزن و افزودن به تقویم رو انتخاب کن. بهتره در اپ Calendar یه تقویم جدا به اسم «مالی» بسازی؛ هر بار فایل جدید ساختی، تقویم قبلی رو پاک کن تا رویدادها تکراری نشن.</p></details>`;
+  <details class="fold"><summary>${IC.down}یادآور اقساط در تقویم</summary>
+    <p>در تب گزارش، پایین صفحه، «افزودن به تقویم» رو بزن. بار اول باید میان‌بُر <code>FI Calendar</code> رو در Shortcuts بسازی؛ راهنمای قدم‌به‌قدمش همون‌جا زیر دکمه هست.</p></details>`;
 
   // ---------- فرم تراکنش ----------
   const withSel = (list, sel) => sel && !list.includes(sel) ? [sel, ...list] : list;
@@ -1095,13 +1128,45 @@
     shareFile(new Blob([buf], { type: mime }), `fi-${from.replace('/', '-')}_${to.replace('/', '-')}.xlsx`, mime);
   }
 
-  function exportICS() {
+  // سررسیدهای پرداخت‌نشده‌ی ۱۲ ماه آینده + موعد بدهی و طلب
+  function upcomingItems() {
     const t = today(), cur = ym(t), map = C.txAmountMap(S);
     let obs = [];
     for (let i = 0; i <= 12; i++) obs = obs.concat(C.obligationsForMonth(S, C.addYm(cur, i), map));
     obs = obs.filter(o => !o.paid && o.due >= t);
     openDebts().filter(d => d.due && d.due >= t).forEach(d => obs.push({ kind: 'debt', id: d.id, key: 'd', due: d.due,
       name: debtTitle(d), sub: d.dir === 'owe' ? 'موعد پرداخت بدهی' : 'موعد دریافت طلب', amount: debtLeft(d), variable: false }));
+    return obs.sort((a, b) => a.due.localeCompare(b.due));
+  }
+  const SHORTCUT_NAME = 'FI Calendar';
+  const openURL = u => (window.__fiOpenURL || (x => { window.location.href = x; }))(u);
+  // داده‌ی میان‌بُر Shortcuts: JSON ساده با تاریخ میلادی که Shortcuts مستقیم می‌فهمه
+  function calendarPayload() {
+    const g = js => { const x = C.toG(js); return `${x.gy}-${C.pad(x.gm)}-${C.pad(x.gd)}`; };
+    return { app: 'FI', events: upcomingItems().map(o => ({
+      title: `${o.kind === 'loan' ? 'قسط ' : ''}${o.name}: ${o.variable ? 'حدود ' : ''}${money(o.amount)}`,
+      start: `${g(o.due)} 09:00`, end: `${g(o.due)} 09:30`,
+      notes: `${o.sub}، سررسید ${dateFull(o.due)} (FI)` })) };
+  }
+  async function sendToCalendar() {
+    const data = calendarPayload();
+    if (!data.events.length) { toast('سررسید یا موعد بازی در ۱۲ ماه آینده نیست.', 'bad'); return; }
+    const text = JSON.stringify(data);
+    try { await navigator.clipboard.writeText(text); }
+    catch (e) { // اگه کپی خودکار نشد، متن رو نشون بده تا دستی کپی بشه
+      openSheet('کپی دستی', `<p class="note">کپی خودکار انجام نشد. داخل کادر بزن، Select All و Copy رو بزن، بعد «اجرای میان‌بُر».</p>
+        <textarea id="caltext" rows="6" readonly>${esc(text)}</textarea><button class="btn wide" id="runsc">اجرای میان‌بُر</button>`, ov => {
+        $('#caltext', ov).addEventListener('focus', e => e.target.select());
+        $('#runsc', ov).addEventListener('click', () => { closeSheet(ov); openURL('shortcuts://run-shortcut?name=' + encodeURIComponent(SHORTCUT_NAME)); });
+      });
+      return;
+    }
+    toast(`${faDigits(data.events.length)} سررسید کپی شد؛ Shortcuts باز می‌شه…`);
+    setTimeout(() => openURL('shortcuts://run-shortcut?name=' + encodeURIComponent(SHORTCUT_NAME)), 350);
+  }
+
+  function exportICS() {
+    const obs = upcomingItems();
     if (!obs.length) { toast('سررسید یا موعد بازی در ۱۲ ماه آینده نیست.', 'bad'); return; }
     const icsText = s => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
     const fold = line => { const out = []; let s = line; while (s.length > 36) { out.push(s.slice(0, 36)); s = ' ' + s.slice(36); } out.push(s); return out.join('\r\n'); };
@@ -1165,7 +1230,7 @@
       newloan: () => openLoanForm(), newfixed: () => openFixedForm(),
       loan: () => openLoanDetail(id), fixed: () => openFixedForm(id),
       newdebt: () => openDebtForm(null, b.dataset.dir), debtd: () => openDebtDetail(id),
-      excel: exportExcel, ics: exportICS, backup,
+      excel: exportExcel, ics: exportICS, cal: sendToCalendar, backup,
       unit: () => { S.settings.unit = b.dataset.u; save(); lastHero = null; render(); },
       saveexp: () => { S.settings.expectedIncome = readAmount($('#view'), 'expected'); save(); toast('ذخیره شد.'); },
       addcat: () => { const inp = $('#newcat-' + b.dataset.type); const v = inp.value.trim().slice(0, 40); if (!v) return;

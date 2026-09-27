@@ -1,5 +1,5 @@
 // کش آفلاین: همه‌ی فایل‌های اپ یک بار ذخیره می‌شن و بعد بدون اینترنت کار می‌کنه.
-const VERSION = 'fi-v6';
+const VERSION = 'fi-v7';
 const FILES = ['./', 'index.html', 'core.js', 'app.js', 'xlsx.full.min.js', 'manifest.webmanifest',
   'fonts/vazirmatn.woff2', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });

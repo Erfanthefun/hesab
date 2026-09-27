@@ -362,6 +362,13 @@ textarea { min-height: 130px; margin-top: 12px; resize: vertical; }
 .cmp li { display: grid; grid-template-columns: 1fr auto 70px; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: .88rem; }
 .cmp li:last-child { border-bottom: 0; }
 .cmp b { font-variant-numeric: tabular-nums; font-weight: 600; } .cmp em { font-style: normal; font-size: .76rem; text-align: end; color: var(--muted); }
+.guide { margin-top: 10px; }
+.steps { margin: 8px 0 0; padding-inline-start: 20px; font-size: .88rem; color: var(--ink-2); line-height: 1.8; }
+.steps ol { padding-inline-start: 18px; margin: 4px 0; } .steps ul { padding-inline-start: 16px; margin: 2px 0; list-style: disc; }
+.steps li { margin-bottom: 4px; } .steps b { color: var(--ink); }
+.steps code, .guide code { direction: ltr; unicode-bidi: embed; background: var(--surface-2); padding: 1px 6px; border-radius: 6px; font-size: .84rem; }
+.steps .en { direction: ltr; unicode-bidi: isolate; font-feature-settings: normal; font-weight: 700; color: var(--ink); }
+.small-top { margin-top: 10px !important; min-height: 42px; font-size: .9rem; }
 .catbars small { color: var(--muted); font-weight: 500; margin-inline-start: 4px; }
 @media (max-width: 360px) { .k-v { font-size: 1.1rem; } .donutwrap { flex-direction: column; } }
 @media (max-width: 360px) { main { padding-inline: 12px; } .sums.three { grid-template-columns: 1fr 1fr; } .quick button { font-size: .88rem; } }
